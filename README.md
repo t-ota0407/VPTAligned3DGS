@@ -1,145 +1,150 @@
 # VPTAligned3DGS
 
-Meta Quest 3 のビデオパススルー（VPT）と 3D Gaussian Splatting（3DGS）シーンを、
-**パススルーカメラ画像の再ローカライズによって自動で位置合わせする** MR アプリと、
-その計算をオフロードする PC サーバの実装です。
+*English | [日本語](README.ja.md)*
 
-3DGS シーンを撮影した元の COLMAP 再構成に対してヘッドセットのカメラ画像を再ローカライズし、
-複数キーフレームのカメラ中心から Umeyama で Sim(3)（回転・並進・スケール）を推定して、
-3DGS をユーザーの実空間に重ね合わせます。スケールを含めて画像だけから解くため、
-マーカーや深度スキャンを必要としません。
+**Automatic alignment of a 3D Gaussian Splatting (3DGS) scene with the video passthrough (VPT) of a Meta Quest 3**, using visual relocalization of the headset's passthrough camera images — plus the PC server that offloads the computation.
 
-![システム概要](images/teaser.png)
+The headset's camera images are relocalized against the **COLMAP reconstruction that the 3DGS scene was trained from**. Camera centers from several keyframes are then matched against the corresponding Quest world positions, and a Sim(3) transform (rotation, translation and **scale**) is estimated with Umeyama's method, placing the 3DGS overlay onto the user's real room. Because the scale is solved from the images themselves, **no fiducial markers and no depth scanning are required**.
 
-*(a) 3DGS のモデル座標系 O<sub>m</sub> を Sim(3)（**x**<sub>w</sub> = s R **x**<sub>m</sub> + **t**）で
-Quest のワールド座標系 O<sub>w</sub> へ合わせる。(b) 位置合わせ後、3DGS（左）と VPT（右）で
-同じ検証点（VCP）が実物と重なる。(c) システム構成: ヘッドセットがキーフレームを Wi-Fi で送り、
-エッジ PC が再ローカライズ → Umeyama で Sim(3) 推定 → 受理ゲートを通ったものだけを返送する。*
+![System overview](images/teaser.png)
+
+*(a) The 3DGS model frame O<sub>m</sub> is aligned to the Quest world frame O<sub>w</sub> by a Sim(3) transform (**x**<sub>w</sub> = s R **x**<sub>m</sub> + **t**). (b) After alignment, the same check point (VCP) coincides with the real object in both the 3DGS render (left) and the passthrough view (right). (c) System architecture: the headset streams keyframes over Wi-Fi; the edge PC relocalizes them, estimates the Sim(3) with Umeyama's method, and returns only solutions that pass the acceptance gate.*
 
 ---
 
-## 1. リポジトリ構成
+## 1. Repository layout
 
 ```
-├─ unity/                          Quest 3 側 MR アプリ
-│  ├─ Specification.md               設計書（なぜこの方式か）
-│  ├─ ImplementationSpec.md           実装仕様書（確定値・座標数式。§13 が単一の真実）
-│  ├─ readme.md                       セットアップ・実行・操作・トラブルシュート
-│  ├─ package/                        aras-p UnityGaussianSplatting v1.1.1（MIT・同梱）
-│  └─ projects/VPTAligned3DGS/        Unity プロジェクト本体
-│     └─ Assets/Scripts/              位置合わせ・UDP 通信・実験制御
-├─ server/                          PC 側（受信サーバ ＋ CV 再ローカライズ）
-│  ├─ run.py                          Windows: UDP 受信・Sim(3) 返送・GUI
-│  ├─ vptserver/cv/                   WSL2: hloc 再ローカライズ・Sim(3) 推定・品質ゲート
-│  ├─ analysis/                       評価実験の集計スクリプト
-│  └─ tests/                          純粋計算部のテスト
-├─ CLAUDE.md                       開発運用規約・技術的前提
+├─ unity/                          MR application (Quest 3)
+│  ├─ Specification.md               Design rationale — why this approach, what was rejected
+│  ├─ ImplementationSpec.md          Implementation contract — fixed values, coordinate math (§10 = parameters)
+│  ├─ OperationGuide.md              How to run it — setup, controls, experiments, troubleshooting
+│  ├─ package/                       aras-p UnityGaussianSplatting v1.1.1 (MIT, vendored)
+│  └─ projects/VPTAligned3DGS/       Unity project
+│     └─ Assets/Scripts/             Alignment, UDP transport, experiment control
+├─ server/                          PC side (receiver + CV relocalization)
+│  ├─ run.py                         Windows: UDP receive, Sim(3) reply, GUI
+│  ├─ vptserver/cv/                  WSL2: hloc relocalization, Sim(3) estimation, quality gates
+│  ├─ analysis/                      Evaluation / aggregation scripts
+│  └─ tests/                         Pure-computation and protocol-consistency tests
+├─ CLAUDE.md                       Working conventions (for AI coding agents)
 ├─ LICENSE                         MIT
-└─ THIRD-PARTY-NOTICES.md          third-party ライセンス（**商用化時の制約を含む**）
+└─ THIRD-PARTY-NOTICES.md          Third-party licenses (**includes commercial-use restrictions**)
 ```
 
-設計の正は `unity/Specification.md`、実装の正は `unity/ImplementationSpec.md` です。
+> **Note on language.** This README is in English; the detailed documents below are written in Japanese.
+
+| If you want to know… | Read |
+|---|---|
+| **Why this design**, what alternatives were rejected, how it is evaluated | [`unity/Specification.md`](unity/Specification.md) |
+| **Fixed values**, coordinate-transform math, wire protocol, parameter tables | [`unity/ImplementationSpec.md`](unity/ImplementationSpec.md) |
+| **How to run it** — setup, controller mapping, experiment procedure, troubleshooting | [`unity/OperationGuide.md`](unity/OperationGuide.md) |
+| PC server details — protocol, CV pipeline, analysis scripts | [`server/README.md`](server/README.md) |
+
+`unity/LICENSE.md` and `unity/docs/` belong to the vendored aras-p UnityGaussianSplatting package, not to this project; they are retained to comply with its MIT license.
 
 ---
 
-## 2. 同梱していないもの
+## 2. How it works
 
-リポジトリにはコードと文書のみを含めています。以下は別途用意してください。
+1. **Offline, once per scene.** SuperPoint features are extracted from the COLMAP database images and re-triangulated using the existing COLMAP poses, producing an SfM model in the *same coordinate frame as the `.ply`*. NetVLAD global descriptors are built for retrieval.
+2. **Online, per keyframe.** The headset sends a downscaled JPEG together with the intrinsics `K`, the camera's world pose and a timestamp. The PC runs SuperPoint → NetVLAD retrieval → LightGlue matching → PnP+RANSAC, yielding the camera center in COLMAP coordinates.
+3. **Aggregation.** Camera centers in COLMAP coordinates and in Quest world coordinates are fitted with Umeyama + RANSAC to obtain the Sim(3), which is sent back to the headset and applied to the splat root transform.
 
-| 対象 | 理由 | 入手・生成方法 |
+Two design points are worth highlighting:
+
+- **The reflection is a constant, not an unknown.** COLMAP is right-handed and Unity is left-handed, and the aras-p importer reads PLY coordinates verbatim, so the model-to-world mapping requires a reflection — expressed as a **negative uniform scale** on the Unity transform. Letting the fit estimate the reflection freely produces a mirrored solution with *exactly the same residual* whenever the camera centers are coplanar (which happens whenever the user walks without changing head height). Fixing the handedness removes this failure mode entirely.
+- **A small residual does not mean a correct solution.** Acceptance therefore requires (i) geometric gates on the *spatial distribution* of the camera centers, and (ii) **agreement between independently solved transforms** — not just a residual threshold. See `unity/Specification.md` §6.
+
+**Accuracy is largely determined by how much the user walks.** Walking a wide arc across the room (~9 m) locks reliably with ~10 cm median error; standing still or walking a short straight line never converges — by design, since such configurations are degenerate.
+
+---
+
+## 3. What is *not* included
+
+Only code and documentation are versioned here. The following must be supplied separately.
+
+| Item | Why | How to obtain |
 |---|---|---|
-| **3DGS モデル**（`.ply` と変換済みアセット） | 数百 MB〜数 GB | 自前の `.ply` を用意し、Unity Editor の `Tools > Gaussian Splats > Create GaussianSplatAsset` で変換して `Assets/3DGSModel/` に配置。`GSTestScene` の `GaussianSplatRenderer` に割り当てる |
-| **COLMAP シーン**（`server/scene_data/`） | 1 シーンあたり 1〜7 GB | 3DGS の学習に使った COLMAP 再構成（`sparse/0` ＋ `images/`）をそのまま置く |
-| **hloc**（`server/Hierarchical-Localization/`） | 別リポジトリ | `cd server && git clone --recursive https://github.com/cvg/Hierarchical-Localization` |
-| **実験の受信データ**（`server/received/`） | 実行時に自動生成 | `run.py` が起動ごとに `session_<時刻>/` を作成 |
-| **Final IK / アバター** | Unity Asset Store の有償アセットで再配布不可 | 位置合わせの本筋には不要。使う場合は別途購入して `Assets/Plugins/RootMotion/` に配置 |
+| **3DGS model** (`.ply` and converted assets) | Hundreds of MB to several GB | Supply your own `.ply`, convert it with `Tools > Gaussian Splats > Create GaussianSplatAsset` in the Unity Editor, place it under `Assets/3DGSModel/` and assign it to the `GaussianSplatRenderer` in `GSTestScene` |
+| **COLMAP scene** (`server/scene_data/`) | 1–7 GB per scene | Drop in the COLMAP reconstruction used to train the 3DGS (`sparse/0` + `images/`) |
+| **hloc** (`server/Hierarchical-Localization/`) | Separate repository | `cd server && git clone --recursive https://github.com/cvg/Hierarchical-Localization` |
+| **Experiment capture data** (`server/received/`) | Generated at runtime | `run.py` creates `session_<timestamp>/` on every launch |
+| **Final IK / avatar** | Paid Unity Asset Store assets, redistribution not permitted | Not required for alignment itself. If needed, purchase separately and place under `Assets/Plugins/RootMotion/` |
 
 ---
 
-## 3. セットアップ
+## 4. Setup
 
-### 3.1 Quest 3 側（Unity）
+### 4.1 Headset (Unity)
 
-前提: **Unity 6000.3.10f1** / URP（Render Graph Compatibility Mode Off）/ **Graphics API = Vulkan** /
-**OpenXR Render Mode = Multi-Pass**（aras-p v1.1.1 は Single Pass Instanced 非対応）/
-Horizon OS v81 以降・MRUK v81 以降（Passthrough Camera Access の要件）。
+Requirements: **Unity 6000.3.10f1** / URP (Render Graph Compatibility Mode **off**) / **Graphics API = Vulkan** / **OpenXR Render Mode = Multi-Pass** (aras-p v1.1.1 does not support Single Pass Instanced) / Horizon OS v81+ and MRUK v81+ (required by Passthrough Camera Access).
 
-1. `unity/projects/VPTAligned3DGS/` を Unity Hub で開く（パッケージは `manifest.json` から自動解決。3DGS パッケージは `file:../../../package` で `unity/package/` を参照）
-2. `.ply` を変換して `Assets/3DGSModel/` に置き、`GSTestScene` の `GaussianSplatRenderer` に割り当てる
-3. `GaussianSplatURPFeature` が **PC・Mobile 両方の URP Renderer** に付いていることを確認（片方だけだと実機で描画されない）
-4. Build Profiles で Android / ARM64 / IL2CPP に切り替えてビルド
+1. Open `unity/projects/VPTAligned3DGS/` in Unity Hub. Packages resolve from `manifest.json`; the 3DGS package is referenced as `file:../../../package`.
+2. Convert your `.ply`, place it under `Assets/3DGSModel/`, and assign it to the `GaussianSplatRenderer` in `GSTestScene`.
+3. Verify that `GaussianSplatURPFeature` is added to **both the PC and the Mobile URP renderer** — with only one of them, nothing renders on device.
+4. Switch the build profile to Android / ARM64 / IL2CPP and build.
 
-権限は `horizonos.permission.HEADSET_CAMERA` のみ（`Assets/Plugins/Android/AndroidManifest.xml` に記載済み）。
+The only permission required is `horizonos.permission.HEADSET_CAMERA` (already declared in `Assets/Plugins/Android/AndroidManifest.xml`).
 
-### 3.2 PC 側
+### 4.2 PC
 
-**重い CV は WSL2(Ubuntu)+CUDA で動かします。** pycolmap は Windows ネイティブで
-`reconstruction.rigs` アクセス時にクラッシュするためです。UDP 受信・Sim(3) 返送・GUI は
-Windows 側の `run.py` が担当し、両者は共有フォルダ（`/mnt/c`）経由で疎結合に動きます。
+**The heavy CV runs under WSL2 (Ubuntu) + CUDA**, because pycolmap crashes on native Windows when `reconstruction.rigs` is accessed. UDP reception, the Sim(3) reply and the GUI stay on the Windows side in `run.py`; the two halves are loosely coupled through the shared `/mnt/c` filesystem.
 
 ```bash
-# Windows 側
+# Windows
 pip install -r server/requirements.txt
 
-# WSL2 側（CUDA 環境）
+# WSL2 (CUDA)
 pip install -r server/requirements-cv.txt
 cd server && git clone --recursive https://github.com/cvg/Hierarchical-Localization
 ```
 
-ポート: データ 50000（Quest→PC） / ビーコン 50001（PC→LAN ブロードキャスト） / 結果 50002（PC→Quest）。
-AP がブロードキャストを遮断する環境では、Quest 側 `UDPManager.manualIPAddress` に PC の IP を設定してください。
+Ports: 50000 data (Quest→PC) / 50001 discovery beacon (PC→LAN broadcast) / 50002 results (PC→Quest).
+If the access point blocks broadcast traffic, set the PC's IP in `UDPManager.manualIPAddress` on the Quest side.
 
 ---
 
-## 4. 実行手順
+## 5. Running
 
 ```bash
-# 0) シーンごとに一度（WSL2/GPU）: 再ローカライズ DB の構築
+# 0) Once per scene (WSL2/GPU): build the relocalization database
 python -m vptserver.cv.hloc_db --scene scene_data/<name>
 
-# 1) Windows: 受信・返送・GUI（起動ごとに received/session_<時刻>/ と cv.json を生成）
+# 1) Windows: receive, reply and GUI (creates received/session_<timestamp>/ and cv.json per launch)
 python run.py
 
-# 2) WSL2: 最新セッションを自動追従し、N 枚ごとに Sim(3) を更新
+# 2) WSL2: follow the newest session, update the Sim(3) every N keyframes
 python -m vptserver.cv.localize
 ```
 
-3. Quest でアプリを起動し、**部屋を歩き回りながら**左グリップでキーフレームを送信します。
-   独立に解かれた Sim(3) が連続して一致すると確定（ロック）し、以後は空間アンカーに永続化されます。
-
-**精度は「どれだけ部屋を歩いたか」でほぼ決まります。** カメラ中心が一直線・同一平面に並ぶと
-Sim(3) が退化し、残差が小さいまま誤った解に落ちます（詳細と対策は `CLAUDE.md` §13）。
+Then launch the app on the Quest and **walk around the room** while sending keyframes with the left grip. Once independently solved Sim(3) estimates agree consecutively, the alignment locks and is persisted to spatial anchors.
 
 ---
 
-## 5. 評価実験と解析
+## 6. Evaluation
 
-Quest 側 `Assets/Scripts/Experiment/` に実験制御・検証点（CP）の測量・先端校正・
-トラッキング原点の監視を実装しています。実機での作業は「一定時間歩き回る」だけで、
-精度と収束の曲線は保存済みキーフレームからオフラインで再構成します。
+`Assets/Scripts/Experiment/` implements trial control, check-point surveying, controller-tip calibration and tracking-origin monitoring. On device, a trial consists of nothing but *walking around for a fixed duration*; the accuracy-versus-time curve is reconstructed offline from the stored keyframes.
 
 ```bash
-python -m analysis.check_tracking      # 先に必ず実行（原点が動いた試行の検出）
-python -m analysis.experiment_report   # 主結果（試行ごとに姿勢を解き直して CP と突き合わせ）
-python -m analysis.accuracy_vs_time    # 1 試行の収束曲線
+python -m analysis.check_tracking      # Run first: detects trials where the world origin moved
+python -m analysis.experiment_report   # Main result: re-solves the pose per trial and compares against check points
+python -m analysis.accuracy_vs_time    # Convergence curve for a single trial
 ```
 
-純粋計算部のテスト:
+Tests for the pure-computation parts:
 
 ```bash
 cd server
 python -m tests.test_geometry
 python -m tests.test_gates
+python -m tests.test_alignment_gates
 ```
 
 ---
 
-## 6. ライセンス
+## 7. License
 
-本プロジェクト自体（`unity/projects/VPTAligned3DGS/Assets/Scripts/`, `server/`, 設計文書）は
-[MIT License](LICENSE)（© 2026 Ota, The University of Tokyo）です。
+This project's own code and documentation (`unity/projects/VPTAligned3DGS/Assets/Scripts/`, `server/`, the design documents) are released under the [MIT License](LICENSE), © 2026 Ota, The University of Tokyo.
 
-**依存する第三者ソフトウェアには商用化の制約があります。**
-特徴点抽出の **SuperPoint** と画像検索の **NetVLAD** は研究/非商用ライセンスのため、
-現構成は学術研究・論文用途では利用可能ですが、そのまま商用製品には組み込めません。
-詳細は [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) を参照してください。
+**Some third-party dependencies restrict commercial use.** The SuperPoint feature extractor and the NetVLAD image-retrieval model are distributed under research / non-commercial licenses, so the current configuration is usable for academic research and publication but **cannot be shipped in a commercial product as-is**. See [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) for the full list.

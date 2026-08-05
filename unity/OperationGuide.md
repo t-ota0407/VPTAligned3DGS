@@ -1,9 +1,11 @@
-# VPTAligned3DGS
+# OperationGuide.md — 運用手順書
 
-作成済みの **3D Gaussian Splatting（3DGS）シーン**を、Meta Quest 3 の**ビデオパススルー（VPT）**と**自動で位置合わせ**して重畳表示する XR アプリ。
+VPTAligned3DGS を**セットアップし、実機で動かし、評価実験を回す**ための手順書。
 位置合わせは「手動で粗合わせ → パススルーカメラ画像を COLMAP DB に再ローカライズして Sim(3) を自動推定」という二段構えで行う。
 
-> このファイルは **使い方（運用手順）** の索引。設計の意図は [`Specification.md`](Specification.md)、実装契約（確定値・§13 パラメータ）は [`ImplementationSpec.md`](ImplementationSpec.md)、Unity/XR の運用規約と最優先の前提は リポジトリ直下の [`CLAUDE.md`](../CLAUDE.md) を見る。
+> **他の文書との関係**: なぜこの設計かは [`Specification.md`](Specification.md)、確定値・データ形式・パラメータは [`ImplementationSpec.md`](ImplementationSpec.md)、Unity/XR の作業規約は リポジトリ直下の [`CLAUDE.md`](../CLAUDE.md)。プロジェクト全体の入口は [`../README.md`](../README.md)。
+>
+> **本書のパス表記**: `<repo>` はリポジトリのルート（例 `C:\work\VPTAligned3DGS`）、WSL2 からは `/mnt/c/...` の対応するパスに読み替える。
 
 ---
 
@@ -23,20 +25,21 @@
 - **PC(Windows) `run.py`**: UDP 受信・保存、LAN ビーコン、Sim(3) の Quest 返送、GUI。**重い CV は動かさない**。
 - **WSL2(Ubuntu+CUDA) `localize.py`**: パススルー画像を COLMAP DB に再ローカライズし、複数キーフレームのカメラ中心から **Umeyama+RANSAC で Sim(3)** を解く。
 
-> **なぜ WSL2 か**: pycolmap は Windows ネイティブでクラッシュするため、CV は WSL2 で動かす（詳細 `CLAUDE.md` §13）。
+> **なぜ WSL2 か**: pycolmap は Windows ネイティブでクラッシュするため、CV は WSL2 で動かす（詳細 `ImplementationSpec.md` §1）。
 
 ---
 
 ## 2. リポジトリ構成
 
 ```
-<repo root>/
-├─ CLAUDE.md                       ← Unity/XR 運用規約・最優先の前提
+<repo>/
+├─ README.md                       ← プロジェクトの入口（英語 / README.ja.md）
+├─ CLAUDE.md                       ← Unity/XR 作業規約
 ├─ unity/
-│  ├─ readme.md                    ← 本ファイル（使い方の索引）
+│  ├─ OperationGuide.md            ← 本ファイル（運用手順書）
 │  ├─ Specification.md             ← 設計書（なぜこの設計か）
-│  ├─ ImplementationSpec.md        ← 実装仕様（確定値・§13 がパラメータの真実）
-│  ├─ LICENSE.md / package/        ← aras-p UnityGaussianSplatting（MIT・§10 参照）
+│  ├─ ImplementationSpec.md        ← 実装仕様（確定値・§10 がパラメータの真実）
+│  ├─ LICENSE.md / docs/ / package/ ← aras-p UnityGaussianSplatting（MIT・§10 参照）
 │  └─ projects/VPTAligned3DGS/     ← Unity プロジェクト本体（Assets/Scripts/ に自作コード）
 └─ server/                         ← PC オフロードサーバ（run.py + vptserver/ + scene_data/）
 ```
@@ -44,7 +47,8 @@
 主な自作コード:
 - Quest 側 `unity/projects/VPTAligned3DGS/Assets/Scripts/`：`AlignmentManager`（位置合わせ）, `UDPManager`（通信）, `KeyframeUploader`（送信）, `AnchorPersistence`（永続化）, `GaussianSplatController`（表示）, `AlignmentHud`（HUD）, `IKTargetManager` / `AvatarVisibility`（アバター）。
 - 評価用 `Assets/Scripts/Experiment/`：`ExperimentController`（試行制御・リセット）, `ExperimentLogger`（JSONL 記録）, `ControlPointMeasure`（**Real CP**＝実物側の位置の実測。実験前に 1 回。HUD `Set Real CP`）, `ControlPointEdit`（**Virtual CP**＝モデル側 CP の VR 内での置き直し。位置合わせ前のみ。HUD `Edit Virtual CP`）, `CpGizmos`（CP の球・ラベル描画）, `ControllerTipCalibration`（先端校正）, `ControlPointStore`（CP の受け渡し形式）。Editor 側は `Assets/Editor/ControlPointToolWindow.cs`。→ §9
-- PC 側 `server/vptserver/`：`udp_receiver`/`beacon`/`storage`（受信系）, `cv/`（`localize`, `geometry`, `gates`, `hloc_db`）。集計は `server/analysis/analyze_experiments.py`。
+- Quest 側の監視: `TrackingOriginWatcher`（ワールド原点の移動検出 → §7-5）。
+- PC 側 `server/vptserver/`：`udp_receiver`/`beacon`/`storage`（受信系）, `cv/`（`localize`, `geometry`, `gates`, `hloc_db`）。集計は `server/analysis/`（主結果は `experiment_report.py`、健全性チェックは `analyze_experiments.py` → §9-3・§9-4）。
 
 ---
 
@@ -79,7 +83,7 @@ python3 -m venv ~/vptcv
 source ~/vptcv/bin/activate
 python -m pip install -U pip wheel
 
-cd /mnt/c/Users/heatf/Desktop/VPTAligned3DGS/server
+cd /mnt/c/<repo への WSL2 パス>/server
 pip install -r requirements.txt -r requirements-cv.txt          # numpy/opencv/pycolmap
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
 cd ~ && git clone --recursive https://github.com/cvg/Hierarchical-Localization.git
@@ -93,7 +97,7 @@ python -c "import numpy, cv2, pycolmap, torch; from hloc import extract_features
 `server/scene_data/<name>/` に COLMAP 一式（`sparse/0` + `images/`）を置き:
 ```bash
 source ~/vptcv/bin/activate
-cd /mnt/c/Users/heatf/Desktop/VPTAligned3DGS/server
+cd /mnt/c/<repo への WSL2 パス>/server
 python -m vptserver.cv.hloc_db --scene scene_data/<name>       # 例: scene_data/example1
 ```
 
@@ -105,14 +109,14 @@ python -m vptserver.cv.hloc_db --scene scene_data/<name>       # 例: scene_data
 
 **① Windows（受信・返送・GUI）**
 ```powershell
-cd C:\Users\heatf\Desktop\VPTAligned3DGS\server
+cd <repo>\server
 python run.py                      # 起動毎に received/session_<時刻>/ と cv.json を生成
 ```
 
 **② WSL2（CV 監視。最新セッションを自動追従）**
 ```bash
 source ~/vptcv/bin/activate
-cd /mnt/c/Users/heatf/Desktop/VPTAligned3DGS/server
+cd /mnt/c/<repo への WSL2 パス>/server
 python -m vptserver.cv.localize    # 引数なし（cv.json / 自動検出でシーン解決）
 ```
 
@@ -332,7 +336,7 @@ Editor では操作した瞬間に反映され（Play 中・Edit 中どちらで
 | 表示 | 意味 |
 |---|---|
 | `✓`（緑）| このセッションで確認済み |
-| `▲`（琥珀）| 値はあるが**このセッションでは未検証**（例: `▲ 先端 前回値`）。試行は開始できない |
+| `▲`（琥珀）| 値はあるが**このセッションでは未検証**（例: `▲ Tip old`）。試行は開始できない |
 | `✗`（赤）| 未設定・未応答 |
 
 > `▲` を作った理由: 「一度確認した」と「今この瞬間に有効」は別物で、前者を `✓` にすると
@@ -430,7 +434,7 @@ Sim(3) が永遠に返らず、試行は必ずタイムアウトする。外か�
 ### 7-1. 反射（負スケール）の固定
 
 COLMAP は右手系、Unity は左手系で、aras-p は PLY の座標を軸反転せず読む。つまり**手性の違いは
-座標規約から決まる定数**であって、推定すべき未知数ではない（§6 / `Specification.md` §8）。
+座標規約から決まる定数**であって、推定すべき未知数ではない（`Specification.md` §8 / `ImplementationSpec.md` §2.4）。
 `geometry.umeyama(handedness=-1)` で det(Q)=-1 を強制し、常に負スケールの解にする。
 
 自由推定へ戻したい場合は `cv.json` の `handedness` を `0` にする（通常は不要）。
@@ -440,11 +444,13 @@ COLMAP は右手系、Unity は左手系で、aras-p は PLY の座標を軸反�
 | 項目 | 既定 | 意味 |
 |---|---|---|
 | `min_inliers` | 30 | PnP インライアが少ないキーフレームは蓄積しない |
-| `min_inlier_ratio` | 0.5 | 解のインライア率 |
-| `max_rmse` | 0.05 m | world 残差 RMSE |
+| `min_inlier_ratio` | 0.40 | 解のインライア率 |
+| `max_rmse` | 0.08 m | world 残差 RMSE（部屋規模で 24 点使うと 5cm を超えうる）|
 | `min_baseline_m` | 1.50 m | カメラ中心の最大間隔（**その場で首を振っただけを弾く**）|
 | `min_second_extent_m` | 0.40 m | 第 2 主成分方向の広がり（**一直線に歩いただけを弾く**）|
 | `expected_scale` | 未設定 | シーン既知スケール。**通常は使わない**（下記）|
+
+> **Quest 側のゲートはこれより厳しい**（`minInlierRatio` 0.5 / `maxRmseM` 0.05 m）。PC 側は「明らかにおかしい解」を落とすだけで、正しさの判定は Quest 側の連続一致（§7-3）が担う。両者の一覧は `ImplementationSpec.md` §10。
 
 ### 7-2b. 精度は「どれだけ部屋を歩いたか」でほぼ決まる
 
@@ -489,7 +495,7 @@ COLMAP の任意単位と実メートルの比は、その再構成に固有の�
   境界ボックスの隅は原点から 6m 以上離れるため、ここを小さくしすぎると実機の雑音下では
   ほぼ成立しない（8cm にしたところ 60 秒以内にロックしなくなった）。
 - 未確定の間も姿勢は適用する（収束の様子が見える）が、`Locked` にはせず永続化もしない。
-- 収束時刻として記録するのは**確定した瞬間**（`OnAutoAligned`）。HUD には `一致 1/2 ずれ3cm` と進捗が出る。
+- 収束時刻として記録するのは**確定した瞬間**（`OnAutoAligned`）。HUD には `match 1/2 (3 cm apart)` と進捗が出る。
 - `minConsecutiveAgreements = 1` にすると従来どおり 1 件目で確定する。
 
 > なぜ連続一致か: 悪条件の解はキーフレームが増えると跳ねる。独立に解かれた 2 つが同じ答えに
@@ -579,9 +585,9 @@ PC の画面を見たいときは外さずに一旦置く（外すとスリー�
 
 | HUD の表示 | 詰まっている段階 | 対処 |
 |---|---|---|
-| `送信 12  PC採用 0` | キーフレームが PC に届いていない、または再ローカライズに失敗している | ネットワーク（§6）、シーン DB の指定（`cv.json` の `scene`）、`min_inliers` を確認 |
-| `PC で棄却: <理由>`（琥珀） | PC は解いているが公開ゲートで落としている | 理由がそのまま出る（rmse 超過 / インライア率 / 配置）。§7-2 の閾値を見直す |
-| `採用 3  棄却 0  一致 1/2 ずれ25cm` | 解は届いているが、独立な解が一致しない | 歩き方が足りない。部屋を大きく回る（§7-2b）|
+| `Sent 12 · accepted 0` | キーフレームが PC に届いていない、または再ローカライズに失敗している | ネットワーク（§6）、シーン DB の指定（`cv.json` の `scene`）、`min_inliers` を確認 |
+| `Rejected: <理由>`（琥珀） | PC は解いているが公開ゲートで落としている | 理由がそのまま出る（rmse 超過 / インライア率 / 配置）。§7-2 の閾値を見直す |
+| `accepted 3 · match 1/2 (25 cm apart)` | 解は届いているが、独立な解が一致しない | 歩き方が足りない。部屋を大きく回る（§7-2b）|
 
 WSL2 のターミナルにも同じ理由が数値付きで出ます:
 
@@ -644,7 +650,7 @@ Sim(3) 非公開（ゲート不合格）: rmse=0.0912m(>0.08m) [n=24 inliers=18 
 | 前提 | なぜ必要か | 確認方法 |
 |---|---|---|
 | **サーバと CV の両方が応答** | `run.py` だけ起動して WSL2 の `localize` を忘れると、キーフレームは届くのに Sim(3) が返らず全試行がタイムアウトする | HUD の `● Server 3ms  ● CV`（→ §6-1）|
-| **コントローラ先端の校正（毎セッション）** | Unity が返すのは本体内部の追跡原点で、実際に物へ当てる先端ではない。差は数 cm あり、測りたい量と同じオーダー。未校正だと系統誤差が丸ごと乗る。**前回の保存値は今の物理構成に対応している保証がない**ので、毎回やり直す | HUD が `✓ 先端 2.1mm`（緑）。`▲ 先端 前回値`（琥珀）は未検証状態で、このままでは Real CP を測れない |
+| **コントローラ先端の校正（毎セッション）** | Unity が返すのは本体内部の追跡原点で、実際に物へ当てる先端ではない。差は数 cm あり、測りたい量と同じオーダー。未校正だと系統誤差が丸ごと乗る。**前回の保存値は今の物理構成に対応している保証がない**ので、毎回やり直す | HUD が `✓ Tip 2.1mm`（緑）。`▲ Tip old`（琥珀）は未検証状態で、このままでは Real CP を測れない |
 | **Virtual CP が実物の特徴点に合っている** | ダミー座標のままだと何も測っていない | Editor の Control Points ウィンドウが仮座標を検出すると赤い警告を出す |
 | **Real CP を測定済み（毎セッション）** | これが無いと、集めたデータから誤差を計算できない | HUD の準備チェックが `Real CP 6`（緑）。`Real CP not set` なら A で測る |
 | **アンカー永続化が OFF** | 前回の姿勢が起動時に復元されると、「起動直後にロック成功」と誤記録される | `ExperimentController.forceExperimentMode=true`（既定）で自動的に OFF になる |
@@ -661,13 +667,13 @@ Sim(3) 非公開（ゲート不合格）: rmse=0.0912m(>0.08m) [n=24 inliers=18 
 
    1. **動かない 1 点を選ぶ** — 机の角、ネジの頭、棚の縁の角など。毎回同じ場所に先端を当てられるものが良い。
    2. その点に**コントローラの物理的な先端を押し当てる**。
-   3. HUD の「先端校正」を押す。
+   3. HUD の `Calibrate tip [Y]` を押す。
    4. **先端をその点から離さないまま、本体だけを大きく振る。**
       前後左右に倒す、グリップを回す、当てる角度を変える。先端は動かず、本体の向きだけが変わる状態を保つ。
       コンパスの針を紙に刺したまま回すのと同じ。10 秒ほど続ける。
-   5. 条件が揃うと自動で解けて保存される（「校正 終了」で早めに確定も可）。
+   5. 条件が揃うと自動で解けて保存される（`Finish calib [Y]` で早めに確定も可）。
 
-   HUD は進行に応じて指示を変える。`サンプル 18/24 ・ 振り幅 32°/45°` と進捗が出て、
+   HUD は進行に応じて指示を変える。`18/24 samples · 32°/45° swing` と進捗が出て、
    **暫定残差**も表示される。残差が 8mm を超えると「先端がずれています」と出るので、当て直す。
 
    | やってはいけないこと | 何が起きるか |
@@ -911,7 +917,7 @@ python analysis\accuracy_vs_time.py received\session_<時刻> logs\exp_<時刻>.
 
 ```powershell
 adb pull /sdcard/Android/data/<パッケージ名>/files/experiments/ .\logs\
-cd C:\Users\heatf\Desktop\VPTAligned3DGS\server
+cd <repo>\server
 python analysis\analyze_experiments.py .\logs\ --outdir analysis_out
 ```
 
