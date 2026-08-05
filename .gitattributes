@@ -1,0 +1,23 @@
+# テキストは LF に正規化（Windows / WSL2 の両方で作業するため）
+* text=auto eol=lf
+
+# Unity の YAML アセット: 専用マージドライバ（未設定なら既定マージにフォールバック）
+*.unity   merge=unityyamlmerge eol=lf
+*.prefab  merge=unityyamlmerge eol=lf
+*.asset   merge=unityyamlmerge eol=lf
+*.mat     merge=unityyamlmerge eol=lf
+*.controller merge=unityyamlmerge eol=lf
+
+# バイナリ（改行変換を掛けない）
+*.bytes binary
+*.ttf   binary
+*.otf   binary
+*.fbx   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.pdf   binary
+*.ply   binary
+*.dll   binary
+*.so    binary
+*.aar   binary

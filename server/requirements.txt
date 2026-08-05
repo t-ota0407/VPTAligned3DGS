@@ -1,0 +1,7 @@
+# VPTAligned3DGS オフロードサーバ依存（PC側）
+# 受信・保存だけなら numpy のみで動作（run.py の OpenCV 検証は任意・未インストールでもスキップ）。
+# 今後の CV（特徴抽出・マッチ・PnP・相似変換）に向けて opencv も入れておく。
+numpy>=1.24
+opencv-python>=4.8
+# GUI（run.py のネイティブ・ダッシュボード）。未導入ならヘッドレス動作にフォールバック。
+customtkinter>=5.2

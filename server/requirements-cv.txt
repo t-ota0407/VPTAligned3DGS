@@ -1,0 +1,19 @@
+# 自動位置合わせ（M3 step3）CV パイプライン用の依存（重い・PC側）。
+# 受信/保存だけなら requirements.txt（numpy[+opencv]）で足り、これは CV を動かすとき追加で入れる。
+#   pip install -r requirements.txt -r requirements-cv.txt
+
+# --- コア（COLMAP 読み込み・PnP・幾何）---
+numpy>=1.24
+opencv-python>=4.8
+# pycolmap: hloc 1.5 は >=3.13.0 を要求。最新の 4.0.x は三角測量でネイティブクラッシュ報告あり、
+# hloc がテスト済みの 3.13.0 に固定する（COLMAP モデル I/O・三角測量・absolute pose）。
+pycolmap==3.13.0
+
+# --- ロバストなマッチング（採用: hloc SuperPoint+LightGlue+NetVLAD, GPU 推奨）---
+# 学習特徴でスマホ元画像↔パススルーの見え方差に強い。torch が重いので別管理。
+# hloc は PyPI に無い → GitHub からサブモジュール込みで導入する:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121  # CUDA は環境に合わせる
+#   git clone --recursive https://github.com/cvg/Hierarchical-Localization.git
+#   cd Hierarchical-Localization && python -m pip install -e . && cd ..
+#   # --recursive を忘れたら: git submodule update --init --recursive
+#   # LightGlue が見つからない場合: pip install git+https://github.com/cvg/LightGlue.git

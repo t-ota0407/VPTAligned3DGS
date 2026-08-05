@@ -1,0 +1,72 @@
+# =============================================================
+#  VPTAligned3DGS — repository ignore rules
+#  方針: コードと設計文書のみを版管理する。巨大データ（3DGS モデル・
+#  COLMAP シーン・実験生データ）と再配布不可のサードパーティアセットは
+#  リポジトリに入れず、README に入手・配置手順を書く。
+# =============================================================
+
+# ---------------- Unity: 生成物・ローカル状態 ----------------
+/unity/projects/**/Library/
+/unity/projects/**/Temp/
+/unity/projects/**/Logs/
+/unity/projects/**/UserSettings/
+/unity/projects/**/obj/
+/unity/projects/**/.utmp/
+/unity/projects/**/.claude/
+/unity/projects/**/Assets/_Recovery/
+/unity/projects/**/Assets/_Recovery.meta
+/unity/projects/**/Assets/GaussianAssets/
+/unity/projects/**/Assets/GaussianAssets.meta
+/unity/projects/**/*BurstDebugInformation_DoNotShip/
+*.csproj
+*.sln
+*.sln.DotSettings.user
+*.apk
+*.aab
+
+# ---------------- 3DGS モデルデータ（別配布） ----------------
+# .ply 原本・変換済み .bytes/.asset とも同梱しない。
+# 実行するには .ply を用意し Editor の Create GaussianSplatAsset で
+# 変換して Assets/3DGSModel/ に置く（README 参照）。
+/unity/projects/**/Assets/3DGSModel/
+
+# ---------------- 再配布不可のサードパーティアセット ----------------
+# Final IK: Unity Asset Store の有償アセット（EULA によりソース再配布不可）
+/unity/projects/**/Assets/Plugins/RootMotion/
+/unity/projects/**/Assets/Plugins/RootMotion.meta
+# Mixamo 由来のアバター
+/unity/projects/**/Assets/Avatar/
+/unity/projects/**/Assets/Avatar.meta
+
+# ---------------- 巨大フォントアセット ----------------
+# NotoSansJP の .ttf（OFL）は同梱する。生成済み SDF アセット（131MB・
+# シーン未参照）は除外し、必要なら TMP で再生成する。
+/unity/projects/**/Assets/Fonts/*SDF.asset
+/unity/projects/**/Assets/Fonts/*SDF.asset.meta
+
+# ---------------- PC サーバ（Python） ----------------
+/server/.venv/
+__pycache__/
+*.pyc
+*.pyo
+# hloc は別リポジトリ。git clone --recursive で導入する（README 参照）
+/server/Hierarchical-Localization/
+# COLMAP シーン一式（18GB・別配布）
+/server/scene_data/
+# 実験の受信データ（キーフレーム画像・イベントログ）
+/server/received/
+# 解析スクリプトの出力
+/server/analysis_out/
+
+# ---------------- 参考文献・内部文書 ----------------
+# 他者論文の PDF
+/refs/
+# 特許性評価（内部文書。公開リポジトリに履歴を残さない）
+/PatentAssessment.md
+
+# ---------------- ツール・OS ----------------
+/.claude/
+.idea/
+.vs/
+.DS_Store
+Thumbs.db
