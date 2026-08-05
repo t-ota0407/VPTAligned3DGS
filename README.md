@@ -9,6 +9,13 @@ Meta Quest 3 のビデオパススルー（VPT）と 3D Gaussian Splatting（3DG
 3DGS をユーザーの実空間に重ね合わせます。スケールを含めて画像だけから解くため、
 マーカーや深度スキャンを必要としません。
 
+![システム概要](images/teaser.png)
+
+*(a) 3DGS のモデル座標系 O<sub>m</sub> を Sim(3)（**x**<sub>w</sub> = s R **x**<sub>m</sub> + **t**）で
+Quest のワールド座標系 O<sub>w</sub> へ合わせる。(b) 位置合わせ後、3DGS（左）と VPT（右）で
+同じ検証点（VCP）が実物と重なる。(c) システム構成: ヘッドセットがキーフレームを Wi-Fi で送り、
+エッジ PC が再ローカライズ → Umeyama で Sim(3) 推定 → 受理ゲートを通ったものだけを返送する。*
+
 ---
 
 ## 1. リポジトリ構成
