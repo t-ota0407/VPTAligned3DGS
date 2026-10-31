@@ -87,8 +87,9 @@ unity/projects/VPTAligned3DGS/Assets/
 │  ├─ TrackingOriginWatcher  トラッキング原点の移動検出（実験とデモで共用。§8）
 │  ├─ GaussianSplatController 表示・不透明度・ModelId・モデルの境界ボックス
 │  ├─ PressTracker / Haptics 物理ボタンの短押し・長押しの判定 / 振動の合図（実験・デモで共用）
-│  ├─ AlignmentHud           ヘッドセット内 HUD（実験 / 簡易 / デモ）
+│  ├─ AlignmentHud(.Experiment/.Demo/.Layout)  ヘッドセット内 HUD（partial クラス。実験 / 簡易 / デモ）
 │  ├─ Demo/DemoController    デモ展示モードの進行（§14）
+│  ├─ Demo/RealignMonitor    再位置合わせ（集める → 待つ → 足す）の判定。PONG と時刻だけを入力にする（§14）
 │  └─ Experiment/            評価実験一式（§9）
 └─ Editor/ControlPointToolWindow.cs        Virtual CP の配置・JSON 取り込み
 ```
@@ -658,6 +659,8 @@ python -m tests.test_setup_windows     # セットアップの判断: ディス�
 
 **`localize.watch` を書き換えたときの回帰確認**（WSL2）: 保存済みのセッション（`received/session_*`）を数枚ずつ新しいセッションへ流し込み、`kf_localized.jsonl`・`result_sim3.json`・解き直しのログ（scale・インライア・採否）が書き換え前と一致するかを比べる。GPU で同じ入力なら結果は決定的（同じ 30 枚を 2 回流して完全に一致）。2026-10 の整理（`_Watcher` への分割）はこの方法で、公開されるセッション（`irt_short2`）とゲートで非公開になるセッション（`bld2`）の両方で一致を確認した。
 
+**Quest 側の純粋なクラス**（`RealignMonitor` など）は Unity のバッチモードの `-executeMethod` でシナリオを流して確かめられる（2026-10 の整理で `RealignMonitor` を 30 項目で確認。テストのコードはリポジトリに残していない）。
+
 ### 12.2 hloc/pycolmap・WSL を使う部分
 
 **WSL2 実機でしか確認できない。** `hloc_db` の構築 → 自己ローカライズ（DB 画像を自分自身に照合）→ 実キーフレームからの Sim(3) で検証する（自己テストで誤差/シーン対角 ~1e-4、実キーフレームで残差 ~1cm を確認済み）。CV 環境は `python -m vptserver.cv.check_env` で確かめる。
@@ -737,7 +740,7 @@ CV の自動起動は作者の PC で確認済み（2026-10）: 既定でない�
 
    **PC が遅くても正常に終わる**（実機で 1 枚 13 秒・25 枚溜まって失敗した。`Specification.md` §15.6b）:
    - **収集・待機の合計時間に上限を置かない**。PC が生きていて処理が進んでいる限り待つ。
-   - PC の状態を 6 つに分ける（`DemoController.GetPcStatus`）。**遅いだけ・片付け中は待つ**:
+   - PC の状態を 6 つに分ける（`RealignMonitor.Status`。判定はすべて `Demo/RealignMonitor.cs` にあり、`DemoController` は結果に応じて送信の ON/OFF・振動・文言を出すだけ）。**遅いだけ・片付け中は待つ**:
 
      | 状態 | 判定（PONG） | 扱い |
      |---|---|---|

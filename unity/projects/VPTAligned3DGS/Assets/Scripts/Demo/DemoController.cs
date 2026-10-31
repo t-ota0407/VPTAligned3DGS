@@ -20,7 +20,7 @@ using UnityEngine;
 ///                          └ 保存なし／待ち時間切れ ─→ NeedsAlignment（裏では探し続ける）
 /// Showing ─ 原点の移動・スリープ復帰 → 揃っていればそのまま／揃わなければ Relocating（非表示）
 /// NeedsAlignment / Showing ─[スタッフ: Re-align]→ Aligning ─ 確定 → Saving → Showing
-/// Aligning の中: Collect（PC 採用 24 枚 or 60s）→ Wait（PC の処理と結果を待つ）
+/// Aligning の中（判定は [[RealignMonitor]]）: Collect（PC 採用 24 枚 or 60s）→ Wait（PC の処理と結果を待つ）
 ///                → 未確定なら Top-up（+6 枚）→ Wait … 3 回足しても駄目なら理由を出して保存済みへ戻る
 /// Aligning ─ 原点の移動 → Quest と PC を対でリセットして集め直す
 /// </code>
@@ -154,36 +154,8 @@ public class DemoController : MonoBehaviour
     private bool  _busy;                  // 再位置合わせの開始処理中
     private float _enteredT;              // デモに入った時刻（スタッフ向けの案内を出す期間の起点）
 
-    // ---- 再位置合わせの段階（Aligning の中） ----
-    /// <summary>再位置合わせの段階。Collect = キーフレームを送っている / Wait = 送信を止めて結果を待っている。</summary>
-    public enum AlignPhase { Collect, Wait }
-    private AlignPhase _alignPhase = AlignPhase.Collect;
-    private bool  _alignActive;           // RESET 後の待ちが終わり、段階の判定を始めたか
-    private int   _topUps;                // 追加収集の回数
-    private int   _collectStartAccepted;  // この収集を始めた時点の PC 採用枚数
-    private int   _targetAccepted;        // この収集で目指す PC 採用枚数（累計）
-    private float _phaseT;
-    private float _caughtUpT = -1f;       // PC が届いた分をすべて処理し終えた（と見えた）時刻
-    private float _collectActiveS;        // この収集で実際に送信していた時間（一時停止中は数えない）
-    private bool  _paused;                // PC の処理待ちが溜まったので送信を一時停止している
-    // 進み具合の監視（処理済み枚数）。「止まった」「固まった」の判定に使う
-    private int   _lastDone = -1;
-    private float _stallSince = -1f;      // 溜まっているのに処理中でもなく進まない状態が始まった時刻
-    private float _busySince = -1f;       // このセッションで処理中のまま 1 枚も終わらない状態が始まった時刻
-    private PcStatus _pcIssue = PcStatus.Ok;  // いま続いている PC の異常
-    private float _pcIssueT = -1f;            // その異常が始まった時刻
-
-    /// <summary>再位置合わせ中の PC の状態。**「止まった」と「遅いだけ」「前の処理を片付けている」を区別する。**
-    /// 遅いだけ・片付け中は待ち続ける（時間では打ち切らない）。</summary>
-    private enum PcStatus
-    {
-        Ok,        // CV が今のセッションで動いている（処理待ちなし、または次の処理に入る直前）
-        Busy,      // CV が今のセッションを処理中
-        Switching, // CV は生きていて、前のセッションの処理を片付けている（PONG の cv_on が別のセッション）
-        Starting,  // CV の生存信号がどこにも無い（未起動・別フォルダを監視・古い localize）
-        Stale,     // CV の生存信号が途絶えた
-        Down,      // run.py が応答しない
-    }
+    // ---- 再位置合わせ（Aligning の中）。集める → 待つ → 足す の判定は RealignMonitor、ここは副作用と文言 ----
+    private readonly RealignMonitor _realign = new RealignMonitor();
     private int   _alignAttempt;
     private Coroutine _alignCo;
 
@@ -230,23 +202,45 @@ public class DemoController : MonoBehaviour
         : udp.CvBusy && !udp.CvAlive ? "the PC is still processing earlier keyframes — wait a moment"
         : !udp.CvAlive ? "CV worker not running — check the run.py window" : "";
 
-    private PcStatus GetPcStatus()
+    /// <summary>再位置合わせを諦めた理由（英語。HUD の `Could not align: …` と手順書の表に出る）。</summary>
+    private string FailureText(RealignMonitor.Failure f)
     {
-        if (udp == null || !udp.ServerAlive) return PcStatus.Down;
-        // CV が別のセッション（前の再位置合わせ・実験の試行）をまだ処理している。生きているので待つ
-        string on = udp.CvOnSession;
-        bool elsewhere = !string.IsNullOrEmpty(on) && on != udp.ServerSession;
-        if (udp.CvAlive) return elsewhere ? PcStatus.Switching : udp.CvBusy ? PcStatus.Busy : PcStatus.Ok;
-        // 古い localize（処理中に生存信号を書かない版）との互換: 処理中フラグがあれば長い処理の最中
-        if (udp.CvBusy) return elsewhere ? PcStatus.Switching
-                             : udp.CvAgeS > cvBusyHangS ? PcStatus.Stale : PcStatus.Busy;
-        return udp.CvAgeS < 0f ? PcStatus.Starting : PcStatus.Stale;
+        switch (f)
+        {
+            case RealignMonitor.Failure.PcDown:
+                return "the PC server stopped responding (run.py)";
+            case RealignMonitor.Failure.CvNotStarted:
+                return "the CV worker is not running for this folder — check the [cv] lines in the run.py window";
+            case RealignMonitor.Failure.CvStopped:
+                return "the CV worker stopped — check the [cv] lines in the run.py window";
+            case RealignMonitor.Failure.NotProcessing:
+                return $"the CV worker is not processing this session ({_realign.FailBacklog} keyframes waiting)"
+                       + " — check the [cv] lines in the run.py window";
+            case RealignMonitor.Failure.Stuck:
+                string span = busyNoProgressFailS >= 120f ? $"{busyNoProgressFailS / 60f:F0} min" : $"{busyNoProgressFailS:F0} s";
+                return $"the PC seems stuck — no keyframe finished in {span}";
+            default:
+                return AlignFailureReason;
+        }
     }
 
-    private static string PcIssueText(PcStatus s) =>
-        s == PcStatus.Down     ? "the PC server stopped responding (run.py)"
-      : s == PcStatus.Starting ? "the CV worker is not running for this folder — check the [cv] lines in the run.py window"
-      :                          "the CV worker stopped — check the [cv] lines in the run.py window";
+    private RealignMonitor.Settings RealignSettings => new RealignMonitor.Settings
+    {
+        collectTargetAccepted = collectTargetAccepted, collectMaxS = collectMaxS,
+        topUpAccepted = topUpAccepted, topUpMaxS = topUpMaxS, maxTopUps = maxTopUps,
+        backlogPauseAt = backlogPauseAt, backlogResumeAt = backlogResumeAt,
+        inFlightS = inFlightS, resultGraceS = resultGraceS, waitStallS = waitStallS,
+        busyNoProgressFailS = busyNoProgressFailS, pcLostFailS = pcLostFailS,
+        cvStartWaitS = cvStartWaitS, cvBusyHangS = cvBusyHangS,
+    };
+
+    /// <summary>判定に使う PC の状態（PONG 由来）。UDPManager が無ければ「応答なし」。</summary>
+    private RealignMonitor.Pc PcNow => udp == null ? new RealignMonitor.Pc() : new RealignMonitor.Pc
+    {
+        ServerAlive = udp.ServerAlive, CvAlive = udp.CvAlive, CvBusy = udp.CvBusy, CvPublished = udp.CvPublished,
+        CvAgeS = udp.CvAgeS, ServerSession = udp.ServerSession, CvOnSession = udp.CvOnSession, CvReason = udp.CvReason,
+        KeyframeCount = udp.ServerKeyframeCount, CvDoneCount = udp.CvDoneCount, CvAcceptedCount = udp.CvAcceptedCount,
+    };
 
     /// <summary>来場者向けの 1 行（英語。無ければ空）。スタッフパネルを開いている間は出さない。</summary>
     public string VisitorHint
@@ -295,10 +289,10 @@ public class DemoController : MonoBehaviour
                 case DemoState.NeedsAlignment: return "The 3D scene has not been aligned to this room yet";
                 case DemoState.Aligning:
                     // 歩いているスタッフはパネルを閉じていることが多いので、ここにも進み具合を出す
-                    if (!_alignActive) return "Starting…";
+                    if (!_realign.Active) return "Starting…";
                     if (WaitingForCv) return "Waiting for the PC…";
-                    if (_alignPhase == AlignPhase.Wait) return "Computing on the PC — you can stop walking";
-                    return _paused
+                    if (_realign.CurrentPhase == RealignMonitor.Phase.Wait) return "Computing on the PC — you can stop walking";
+                    return _realign.Paused
                         ? $"PC is catching up — keep walking slowly  ·  {CollectAccepted} / {CollectTarget}"
                         : $"Walk slowly around the room  ·  {CollectAccepted} / {CollectTarget}";
                 default:                       return "";
@@ -308,35 +302,28 @@ public class DemoController : MonoBehaviour
 
     // ---------------- 再位置合わせの進み具合（HUD 用） ----------------
 
-    public AlignPhase CurrentAlignPhase => _alignPhase;
+    public RealignMonitor.Phase CurrentAlignPhase => _realign.CurrentPhase;
     /// <summary>再位置合わせの段階の判定を始めているか（RESET 後の待ちが終わったか）。</summary>
-    public bool  AlignActive     => _state == DemoState.Aligning && _alignActive;
-    public int   TopUpCount      => _topUps;
+    public bool  AlignActive     => _state == DemoState.Aligning && _realign.Active;
+    public int   TopUpCount      => _realign.TopUps;
     public int   MaxTopUps       => maxTopUps;
     /// <summary>この収集で PC が採用した枚数 / 目標枚数。</summary>
-    public int   CollectAccepted => Mathf.Max(0, FreshAccepted - _collectStartAccepted);
-    public int   CollectTarget   => Mathf.Max(1, _targetAccepted - _collectStartAccepted);
-    public float CollectProgress => Mathf.Clamp01(CollectAccepted / (float)CollectTarget);
-    public float PhaseElapsedS   => Time.realtimeSinceStartup - _phaseT;
+    public int   CollectAccepted => _realign.CollectAccepted;
+    public int   CollectTarget   => _realign.CollectTarget;
+    public float CollectProgress => _realign.CollectProgress;
+    public float PhaseElapsedS   => _realign.PhaseElapsedS;
     /// <summary>収集では送信していた時間の上限、待機では待機の上限。</summary>
-    public float PhaseLimitS     => _topUps == 0 ? collectMaxS : topUpMaxS;   // 収集の上限（送信していた時間）。待機に上限は無い
+    public float PhaseLimitS     => TopUpCount == 0 ? collectMaxS : topUpMaxS;   // 収集の上限（送信していた時間）。待機に上限は無い
     /// <summary>この収集で実際に送信していた時間[s]（PC 待ちの一時停止は除く）。</summary>
-    public float CollectActiveS  => _collectActiveS;
+    public float CollectActiveS  => _realign.CollectActiveS;
     /// <summary>PC の処理待ちが溜まったので送信を一時停止しているか。</summary>
-    public bool  CapturePaused   => _alignActive && _alignPhase == AlignPhase.Collect && _paused;
+    public bool  CapturePaused   => _realign.CapturePaused;
     /// <summary>PC が受け取ったがまだ処理していない枚数（kf − cv_done）。新しいセッションの PONG が来るまでは 0。</summary>
-    public int   PcBacklog       => SessionFresh ? Mathf.Max(0, udp.ServerKeyframeCount - udp.CvDoneCount) : 0;
+    public int   PcBacklog       => _realign.PcBacklog;
     /// <summary>新しいセッションで CV がまだ動き出していない（前の処理を片付けている最中など）。</summary>
-    public bool  WaitingForCv    => _alignActive && (GetPcStatus() == PcStatus.Switching || GetPcStatus() == PcStatus.Starting);
+    public bool  WaitingForCv    => _realign.WaitingForCv;
     /// <summary>直近の再位置合わせを諦めた理由（英語。次の再位置合わせを始めるまで残す）。</summary>
     public string LastAlignFailure { get; private set; } = "";
-
-    /// <summary>PONG が RESET 後の新しいセッションのものか。RESET 直後は前のセッションの採用枚数（例: 30）が
-    /// 残っていることがあり（PONG は 2 秒ごと）、それを信じると集め始めた瞬間に「目標到達」と誤判定する。</summary>
-    private bool SessionFresh => udp != null && udp.ServerAlive && udp.ServerSession != _sessionBeforeReset;
-    private string _sessionBeforeReset = "";
-    /// <summary>このセッションで PC が採用したキーフレーム数（新しいセッションの PONG が来るまでは 0）。</summary>
-    private int FreshAccepted => SessionFresh ? udp.CvAcceptedCount : 0;
 
     /// <summary>歩いているスタッフへの指示（英語）。PC の棄却理由（`gates.check_geometry` の文言）から選ぶ。
     /// 文言の先頭が gates.py と一致していることは `tests/test_gates.py` が検査する。</summary>
@@ -344,37 +331,26 @@ public class DemoController : MonoBehaviour
     {
         get
         {
-            if (!_alignActive) return "Starting — resetting the PC session";
+            if (!_realign.Active) return "Starting — resetting the PC session";
             if (WaitingForCv) return "Waiting for the PC to finish earlier work…";
-            if (_alignPhase == AlignPhase.Wait) return "Capture paused — computing the alignment on the PC";
-            if (_paused) return $"PC is catching up ({PcBacklog} queued) — keep walking slowly";
-            string why = SessionFresh ? udp.CvReason : "";
-            if (!string.IsNullOrEmpty(why) && !udp.CvPublished)
+            if (_realign.CurrentPhase == RealignMonitor.Phase.Wait) return "Capture paused — computing the alignment on the PC";
+            if (_realign.Paused) return $"PC is catching up ({PcBacklog} queued) — keep walking slowly";
+            string why = _realign.FreshReason;
+            if (!string.IsNullOrEmpty(why) && !_realign.PcPublished)
             {
                 if (why.StartsWith(GuideNotEnoughMovement)) return "Walk farther — cover more of the room";
                 if (why.StartsWith(GuidePathTooStraight))   return "Walk a curved path, not a straight line";
                 return "Keep moving slowly and look at textured surfaces";
             }
-            if (FewRecognized) return "Few keyframes recognized — check the lighting, avoid blank walls";
-            return _topUps == 0 ? "Walk a curved path around the room while looking around"
-                                : "Walk to a part of the room you have not covered yet";
+            if (_realign.FewRecognized) return "Few keyframes recognized — check the lighting, avoid blank walls";
+            return TopUpCount == 0 ? "Walk a curved path around the room while looking around"
+                                   : "Walk to a part of the room you have not covered yet";
         }
     }
 
     // PC の棄却理由（gates.check_geometry）の先頭。変えるときは gates.py と対で直す（test_gates.py が検査）
     private const string GuideNotEnoughMovement = "not enough movement";
     private const string GuidePathTooStraight   = "path too straight";
-
-    /// <summary>送った枚数に比べて PC が採用した枚数が少ない（照明・模様の無い壁などで照合できていない）。
-    /// 品質の判定ではなく、指示を選ぶための目安（判定は PC 側）。</summary>
-    private bool FewRecognized
-    {
-        get
-        {
-            int sent = uploader != null ? uploader.SentCount : 0;
-            return sent >= 8 && FreshAccepted * 2 < sent;
-        }
-    }
 
     // ================= ライフサイクル =================
 
@@ -443,6 +419,7 @@ public class DemoController : MonoBehaviour
     private void Update()
     {
         if (align == null) return;
+        _realign.Observe(PcNow, uploader != null ? uploader.SentCount : 0, Time.realtimeSinceStartup);
         HandleInput();
         ApplyInputMode();
 
@@ -625,7 +602,7 @@ public class DemoController : MonoBehaviour
     private IEnumerator StartAlignRoutine(bool restart)
     {
         _busy = true;
-        _alignActive = false;
+        _realign.Stop();
         LastAlignFailure = "";
         if (uploader != null) uploader.SetAuto(false);
         align.AcceptAutoResults = false;
@@ -635,7 +612,7 @@ public class DemoController : MonoBehaviour
         // **Quest と PC を対でリセットする**（片方だけでは前の収集が混ざる。ImplementationSpec.md §9.2）。
         // ラベルは実験の試行（trial-NN）と衝突しない形にする（解析は trial.json の label で照合する）。
         // RESET 前のセッション名を覚えておき、PONG がこれと変わるまで PC の枚数を信じない（SessionFresh）。
-        _sessionBeforeReset = udp != null ? udp.ServerSession : "";
+        _realign.Reset(udp != null ? udp.ServerSession : "");
         if (udp != null) udp.SendReset("{\"trial\":0,\"label\":\"" + label + "\",\"mode\":\"demo\"}");
         align.ResetForNewTrial();
         if (anchors != null) anchors.ResetWalk();   // アンカーの置き場所はこれから歩く軌跡から選ぶ
@@ -649,157 +626,41 @@ public class DemoController : MonoBehaviour
         {
             align.AcceptAutoResults = true;
             if (uploader != null) uploader.ResetForNewTrial(startAuto: true);
-            // 最初の収集。新しいセッションは採用枚数 0 から始まるので、起点は 0 に固定する
-            // （この時点の PONG はまだ前のセッションの枚数を返していることがある）。
-            _topUps = 0;
-            BeginCollect(0, collectTargetAccepted);
-            _pcIssue = PcStatus.Ok; _pcIssueT = -1f;
-            _lastDone = -1; _stallSince = -1f; _busySince = -1f;
-            _alignActive = true;
+            // 最初の収集（起点は採用 0 枚。→ RealignMonitor.Begin）
+            _realign.Begin(RealignSettings, Time.realtimeSinceStartup);
+            if (uploader != null) uploader.SetAuto(true);   // reqId は続き番号のまま（同じセッションに足す）
             Debug.Log($"[DemoController] 再位置合わせ開始 label={label}（採用 {collectTargetAccepted} 枚 / {collectMaxS:F0}s まで集める）");
         }
         _busy = false;
         _alignCo = null;
     }
 
-    /// <summary>キーフレームの収集を始める（最初の収集・追加収集）。目標は PC の採用枚数（累計）で持つ。</summary>
-    private void BeginCollect(int startAccepted, int targetAccepted)
-    {
-        _alignPhase = AlignPhase.Collect;
-        _collectStartAccepted = startAccepted;
-        _targetAccepted = Mathf.Max(targetAccepted, startAccepted + 1);
-        _phaseT = Time.realtimeSinceStartup;
-        _caughtUpT = -1f;
-        _collectActiveS = 0f;
-        _paused = false;
-        if (uploader != null) uploader.SetAuto(true);   // reqId は続き番号のまま（同じセッションに足す）
-    }
-
-    /// <summary>再位置合わせの段階を進める（Specification.md §15.6b）。
-    ///
-    /// Collect … PC の採用枚数が目標に達するか、送信していた時間が上限に達したら送信を止め、Wait へ。
-    ///           **PC の処理待ちが溜まったら送信を一時停止する**（バックプレッシャー）。送り続けると
-    ///           PC に溜まり、溜まった分を処理し終えるまで結果が遅れ、CV が次のセッションへ移れない
-    ///           （実機で 25 枚溜まり、再試行が「CV worker not running」で失敗した）。
-    /// Wait    … PC が届いた分をすべて処理し終え（cv_done ≥ kf かつ処理中でない）、結果が届くまで待つ。
-    ///           確定すれば OnAutoAligned で Saving へ移っているので、ここに残っていれば未確定
-    ///           → 追加収集（Top-up）。maxTopUps 回足しても駄目なら諦めて保存済みの位置合わせへ戻る。
-    /// **止めて待つだけにはしない**: 新しい解は新しいキーフレームが届いたときにしか作られず、確定には
-    /// 独立な解の連続一致が要るので、止めたままだと 2 つ目の解が二度と来ないことがある。
-    ///
-    /// **PC が遅くても正常に終わる**: PC が生きていて処理が進んでいる限り、時間では打ち切らない
-    /// （収集の合計時間・待機の合計時間に上限を置かない）。止めるのは次のときだけ（<see cref="CheckPcStopped"/>）:
-    ///   - run.py の無応答・CV の生存信号の途絶（CV は処理中も別スレッドで書くので、途絶える＝死んだ）
-    ///   - このセッションのキーフレームが溜まっているのに、処理中でもなく処理済み枚数が増えない（＝処理していない）
-    ///   - このセッションで処理中のまま、長時間 1 枚も終わらない（＝固まった）
-    /// 前のセッションを片付けている間（cv_on が別のセッション）は、遅いだけなので待つ。</summary>
+    /// <summary>再位置合わせの段階を進める（Specification.md §15.6b）。判定は <see cref="RealignMonitor"/>
+    /// （集める → 待つ → 足す・PC が止まったかどうか）、ここはその結果の副作用（送信の ON/OFF・振動・案内）だけ。
+    /// 確定すれば OnAutoAligned で Saving へ移るので、ここに来るのは未確定の間だけ。</summary>
     private void UpdateAligning()
     {
-        if (!_alignActive) return;   // RESET 後の待ち（resetSettleS）の間
-        float now = Time.realtimeSinceStartup;
-
-        PcStatus st = GetPcStatus();
-        if (CheckPcStopped(st, now)) return;
-
-        if (_alignPhase == AlignPhase.Collect)
+        switch (_realign.Tick(Time.unscaledDeltaTime))
         {
-            // バックプレッシャー: 処理待ちが溜まったら止め、減ったら再開する（ヒステリシス）
-            int backlog = PcBacklog;
-            if (!_paused && backlog >= backlogPauseAt)
-            {
-                _paused = true;
+            case RealignMonitor.Step.PauseCapture:
                 if (uploader != null) uploader.SetAuto(false);
-                Debug.Log($"[DemoController] PC の処理待ち {backlog} 枚 → 送信を一時停止");
-            }
-            else if (_paused && backlog <= backlogResumeAt)
-            {
-                _paused = false;
+                break;
+            case RealignMonitor.Step.ResumeCapture:
                 if (uploader != null) uploader.SetAuto(true);
-                Debug.Log($"[DemoController] PC が追いついた（処理待ち {backlog} 枚）→ 送信を再開");
-            }
-            if (!_paused) _collectActiveS += Time.unscaledDeltaTime;
-
-            // 収集の区切りは「採用枚数」と「実際に送信していた時間」だけ。PC 待ちで止まっている時間は
-            // 数えないので、PC が遅くても集める量は減らない（合計時間の上限は置かない）
-            bool reached = FreshAccepted >= _targetAccepted;
-            if (reached || _collectActiveS >= PhaseLimitS)
-            {
+                break;
+            case RealignMonitor.Step.StartWait:
                 if (uploader != null) uploader.SetAuto(false);
-                Debug.Log($"[DemoController] 収集を止めて結果を待つ（採用 {CollectAccepted}/{CollectTarget}・" +
-                          $"送信 {_collectActiveS:F0}s / 全体 {PhaseElapsedS:F0}s・追加 {_topUps}/{maxTopUps}）");
-                _alignPhase = AlignPhase.Wait;
-                _phaseT = now;
-                _caughtUpT = -1f;
-                _paused = false;
                 Pulse(0.6f);   // 歩いているスタッフに「止まってよい」を伝える
-            }
-            return;
+                break;
+            case RealignMonitor.Step.TopUp:
+                if (uploader != null) uploader.SetAuto(true);   // reqId は続き番号のまま（同じセッションに足す）
+                SetNotice($"Not aligned yet — walk a bit more ({TopUpCount}/{maxTopUps})");
+                Pulse(0.6f);
+                break;
+            case RealignMonitor.Step.Fail:
+                FailAlign(FailureText(_realign.LastFailure));
+                break;
         }
-
-        // ---- Wait（上限時間なし。PC が処理し終えるまで待つ。止まったかどうかは CheckPcStopped が見る） ----
-        bool caughtUp = PhaseElapsedS >= inFlightS && SessionFresh && !udp.CvBusy
-                        && udp.CvDoneCount >= udp.ServerKeyframeCount;
-        if (!caughtUp) _caughtUpT = -1f;
-        else if (_caughtUpT < 0f) _caughtUpT = now;
-        bool settled = _caughtUpT >= 0f && now - _caughtUpT >= resultGraceS;
-        if (!settled) return;
-
-        if (_topUps < maxTopUps)
-        {
-            _topUps++;
-            int acc = FreshAccepted;
-            BeginCollect(acc, acc + topUpAccepted);
-            SetNotice($"Not aligned yet — walk a bit more ({_topUps}/{maxTopUps})");
-            Pulse(0.6f);
-            Debug.Log($"[DemoController] 未確定 → 追加収集 {_topUps}/{maxTopUps}（採用 {topUpAccepted} 枚）" +
-                      $" PC: {(SessionFresh ? udp.CvReason : "")}");
-        }
-        else FailAlign(AlignFailureReason);
-    }
-
-    /// <summary>PC が**止まった**（遅いだけではない）と判断できたら、理由を出して諦め true を返す。
-    /// 遅いだけ（処理中・前のセッションを片付け中）なら何もしない — 時間では打ち切らない。</summary>
-    private bool CheckPcStopped(PcStatus st, float now)
-    {
-        // 1) run.py の無応答・CV の生存信号の途絶・CV がどこにもいない
-        float limit = st == PcStatus.Down || st == PcStatus.Stale ? pcLostFailS
-                    : st == PcStatus.Starting ? cvStartWaitS
-                    : -1f;                                   // Ok / Busy / Switching は生きている
-        if (limit < 0f) { _pcIssue = PcStatus.Ok; _pcIssueT = -1f; }
-        else
-        {
-            if (st != _pcIssue) { _pcIssue = st; _pcIssueT = now; }   // 異常の種類が変わったら数え直す
-            if (now - _pcIssueT > limit) { FailAlign(PcIssueText(st)); return true; }
-        }
-
-        // 処理済み枚数が増えたら「進んでいる」。止まり・固まりの判定はやり直す
-        int done = SessionFresh ? udp.CvDoneCount : -1;
-        bool progressed = done != _lastDone;
-        _lastDone = done;
-
-        // 2) 止まった: このセッションのキーフレームが溜まっているのに、CV は生きていて処理中でもなく、進まない
-        //    （localize がこのセッションを見ていない。run.py --out と localize --watch の食い違いなど）。
-        //    localize は 1 秒ごとに見に来るので、正常なら溜まった時点ですぐ処理中になる。
-        if (st != PcStatus.Ok || PcBacklog <= 0 || progressed) _stallSince = -1f;
-        else if (_stallSince < 0f) _stallSince = now;
-        else if (now - _stallSince > waitStallS)
-        {
-            FailAlign($"the CV worker is not processing this session ({PcBacklog} keyframes waiting)"
-                      + " — check the [cv] lines in the run.py window");
-            return true;
-        }
-
-        // 3) 固まった: このセッションで処理中のまま、長時間 1 枚も終わらない。
-        //    PC 待ちで送信を止めるので 1 回の処理は数枚まで。遅いだけならいずれ 1 枚は終わる。
-        if (st != PcStatus.Busy) _busySince = -1f;
-        else if (_busySince < 0f || progressed) _busySince = now;
-        else if (now - _busySince > busyNoProgressFailS)
-        {
-            string span = busyNoProgressFailS >= 120f ? $"{busyNoProgressFailS / 60f:F0} min" : $"{busyNoProgressFailS:F0} s";
-            FailAlign($"the PC seems stuck — no keyframe finished in {span}");
-            return true;
-        }
-        return false;
     }
 
     /// <summary>諦めた理由（英語）。PC の棄却理由があればそれを、無ければ照合の状況から選ぶ。</summary>
@@ -807,9 +668,10 @@ public class DemoController : MonoBehaviour
     {
         get
         {
-            string why = SessionFresh ? udp.CvReason : "";
-            if (!string.IsNullOrEmpty(why) && !udp.CvPublished) return "the PC rejected the solution: " + why;
-            if (FewRecognized) return $"the PC recognized only {FreshAccepted} of {uploader.SentCount} keyframes";
+            string why = _realign.FreshReason;
+            if (!string.IsNullOrEmpty(why) && !_realign.PcPublished) return "the PC rejected the solution: " + why;
+            if (_realign.FewRecognized)
+                return $"the PC recognized only {_realign.FreshAccepted} of {(uploader != null ? uploader.SentCount : 0)} keyframes";
             return "the solutions did not agree — walk a larger loop around the room";
         }
     }
@@ -818,7 +680,7 @@ public class DemoController : MonoBehaviour
     {
         if (_alignCo != null) { StopCoroutine(_alignCo); _alignCo = null; }
         _busy = false;
-        _alignActive = false;
+        _realign.Stop();
         if (uploader != null) uploader.SetAuto(false);
         align.AcceptAutoResults = false;
         LastAlignFailure = string.IsNullOrEmpty(why) ? "no confirmed alignment" : why;
@@ -832,7 +694,7 @@ public class DemoController : MonoBehaviour
         if (_state != DemoState.Aligning) return;
         if (_alignCo != null) { StopCoroutine(_alignCo); _alignCo = null; }
         _busy = false;
-        _alignActive = false;
+        _realign.Stop();
         if (uploader != null) uploader.SetAuto(false);
         align.AcceptAutoResults = false;
         ReturnToSaved("Re-align cancelled");
@@ -894,8 +756,8 @@ public class DemoController : MonoBehaviour
         if (_state != DemoState.Aligning) return;
         // 確定したら凍結する（来場者の目の前でシーンが跳ねるのを避ける。Specification.md §15.7）
         // 収集中でも待機中でも、確定した時点で段階の判定は終わり
-        _alignActive = false;
-        Debug.Log($"[DemoController] 確定（{_alignPhase}・追加 {_topUps}/{maxTopUps}・採用 {FreshAccepted} 枚）");
+        _realign.Stop();
+        Debug.Log($"[DemoController] 確定（{CurrentAlignPhase}・追加 {TopUpCount}/{maxTopUps}・採用 {_realign.FreshAccepted} 枚）");
         if (uploader != null) uploader.SetAuto(false);
         align.AcceptAutoResults = false;
         _originMovedWhileSaving = false;
