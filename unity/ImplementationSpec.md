@@ -83,7 +83,6 @@ unity/projects/VPTAligned3DGS/Assets/
 │  ├─ TrackingOriginWatcher  トラッキング原点の移動検出（実験とデモで共用。§8）
 │  ├─ GaussianSplatController 表示・不透明度・ModelId
 │  ├─ AlignmentHud           ヘッドセット内 HUD（実験 / 簡易 / デモ）
-│  ├─ IKTargetManager / AvatarVisibility  アバター重畳（VRIK）
 │  ├─ Demo/DemoController    デモ展示モードの進行（§14）
 │  └─ Experiment/            評価実験一式（§9）
 └─ Editor/ControlPointToolWindow.cs        Virtual CP の配置・JSON 取り込み
@@ -740,7 +739,7 @@ CV の自動起動は作者の PC で確認済み（2026-10）: 既定でない�
      | Starting | 生存信号がどこにも無い（`cv_age<0`） | `cvStartWaitS`（120s）で諦める（未起動・別フォルダ・古い localize） |
      | Stale | 生存信号が途絶えた | `pcLostFailS`（10s）で諦める |
      | Down | `run.py` が応答しない | `pcLostFailS`（10s）で諦める |
-   - 加えて、Ok のまま（生きていて処理中でもない）**このセッションのキーフレームが溜まっていて** `waitStallS`（30s）処理済み枚数が増えなければ、**止まった**（localize がこのセッションを処理していない）として諦める（`check that localize --watch matches run.py --out`）。
+   - 加えて、Ok のまま（生きていて処理中でもない）**このセッションのキーフレームが溜まっていて** `waitStallS`（30s）処理済み枚数が増えなければ、**止まった**（localize がこのセッションを処理していない）として諦める。HUD は `run.py` のウインドウの `[cv]` の行を見るよう案内する（`localize` は `run.py` が起動するので、利用者が `--watch` を合わせる場面は `--no-cv` の手動起動だけ）。
    - 待機中の HUD は上限時間の代わりに、`PC processed 27 / 30 (processing 3)… · 32 s` と PC の処理の進み具合を出す。
    - 古い localize（生存信号を処理中に書かない版）とも動くよう、処理中フラグのまま生存信号が古いだけなら `cvBusyHangS`（300s）まで Busy とみなす。再位置合わせを始める前の判定（`RealignBlockReason`）も、その場合は `CV worker not running` ではなく `the PC is still processing earlier keyframes` と出す。
 

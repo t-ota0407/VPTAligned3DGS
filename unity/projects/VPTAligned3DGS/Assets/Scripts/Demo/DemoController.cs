@@ -230,7 +230,7 @@ public class DemoController : MonoBehaviour
     public string RealignBlockReason =>
         udp == null || !udp.ServerAlive ? "PC server not running (run.py)"
         : udp.CvBusy && !udp.CvAlive ? "the PC is still processing earlier keyframes — wait a moment"
-        : !udp.CvAlive ? "CV worker not running (localize)" : "";
+        : !udp.CvAlive ? "CV worker not running — check the run.py window" : "";
 
     private PcStatus GetPcStatus()
     {
@@ -247,8 +247,8 @@ public class DemoController : MonoBehaviour
 
     private static string PcIssueText(PcStatus s) =>
         s == PcStatus.Down     ? "the PC server stopped responding (run.py)"
-      : s == PcStatus.Starting ? "the CV worker is not running for this folder (start localize with --watch matching run.py --out)"
-      :                          "the CV worker stopped (localize)";
+      : s == PcStatus.Starting ? "the CV worker is not running for this folder — check the [cv] lines in the run.py window"
+      :                          "the CV worker stopped — check the [cv] lines in the run.py window";
 
     /// <summary>来場者向けの 1 行（英語。無ければ空）。スタッフパネルを開いている間は出さない。</summary>
     public string VisitorHint
@@ -800,7 +800,7 @@ public class DemoController : MonoBehaviour
         else if (now - _stallSince > waitStallS)
         {
             FailAlign($"the CV worker is not processing this session ({PcBacklog} keyframes waiting)"
-                      + " — check that localize --watch matches run.py --out");
+                      + " — check the [cv] lines in the run.py window");
             return true;
         }
 

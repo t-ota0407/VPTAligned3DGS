@@ -117,23 +117,6 @@ public class ExperimentController : MonoBehaviour
 
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
-    /// <summary>HUD 表示用の 1 行サマリ。</summary>
-    public string StatusLine
-    {
-        get
-        {
-            if (AllTrialsDone) return $"All {plannedTrials} trials complete";
-            switch (_state)
-            {
-                case TrialState.Idle:      return $"Next: trial {_validTrials + 1} of {plannedTrials}";
-                case TrialState.Running:
-                    return $"Trial {TrialIndex}/{plannedTrials} · {Elapsed:F0}/{collectSeconds:F0}s · {Sent} kf";
-                default:
-                    return $"Trial {TrialIndex}/{plannedTrials} · collected {Sent} kf";
-            }
-        }
-    }
-
     public TrialState State => _state;
     /// <summary>計画した試行数を消化したか。HUD は完了表示にし、開始ボタンを塞ぐ。</summary>
     public bool AllTrialsDone => _validTrials >= plannedTrials && _state != TrialState.Running;
@@ -147,8 +130,6 @@ public class ExperimentController : MonoBehaviour
     /// <summary>model 側 CP を VR で編集中か。</summary>
     private bool EditingCPs => cpEdit != null && cpEdit.IsRunning;
 
-    /// <summary>model 側 CP の VR 編集（HUD がボタンと状態表示に使う）。無ければ null。</summary>
-    public ControlPointEdit CpEdit => cpEdit;
     /// <summary>最初のキーフレーム送信から最初の自動ロックまでの秒数（未成立なら -1）。</summary>
     public float TimeToLock => (_lockT >= 0f && _firstKfT >= 0f) ? _lockT - _firstKfT : -1f;
     private int Sent => uploader != null ? uploader.SentCount : 0;
@@ -275,15 +256,6 @@ public class ExperimentController : MonoBehaviour
             !experimentInputEnabled ? AlignmentManager.PoseControlMode.Full
             : needSticks            ? AlignmentManager.PoseControlMode.SticksOnly
                                     : AlignmentManager.PoseControlMode.Locked;
-    }
-
-    /// <summary>実験入力の ON/OFF（HUD の「手動操作」ボタン）。OFF にすると通常の手動位置合わせに戻る。</summary>
-    public void ToggleExperimentInput()
-    {
-        experimentInputEnabled = !experimentInputEnabled;
-        ApplyInputMode();
-        Debug.Log("[ExperimentController] experimentInputEnabled = " + experimentInputEnabled +
-                  (experimentInputEnabled ? "（手動の姿勢操作は封じられます）" : "（手動の姿勢操作が使えます）"));
     }
 
     private void OnDestroy()
@@ -552,7 +524,8 @@ public class ExperimentController : MonoBehaviour
         {
             Debug.LogError("[ExperimentController] WSL2 の CV ワーカが検出できません。" +
                            "このまま始めても Sim(3) が返らず必ずタイムアウトします。" +
-                           "WSL2 で `python -m vptserver.cv.localize` を起動してください。");
+                           "PC の run.py のウインドウで [cv] の行を確認してください" +
+                           "（run.py が localize を自動で起動します。--no-cv で起動した場合は WSL2 で手動起動）。");
             return;
         }
         if (!PointsReady)

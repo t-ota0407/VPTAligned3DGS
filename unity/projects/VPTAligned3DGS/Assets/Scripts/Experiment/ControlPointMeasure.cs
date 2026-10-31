@@ -184,20 +184,6 @@ public class ControlPointMeasure : MonoBehaviour
         _running || ExternalGizmoHold
         || (PoseApplied && (align == null || align.SplatVisible));
 
-    /// <summary>HUD 表示用の 1 行サマリ。</summary>
-    public string StatusLine
-    {
-        get
-        {
-            if (_markers == null || _markers.Length == 0) return "No Virtual CP";
-            if (_running)
-                return (_hasPending ? $"Confirm {CurrentLabel}?" : $"Setting {CurrentLabel}")
-                       + $" ({DoneCount}/{_markers.Length})";
-            if (IsSurveyed) return $"Real CP set: {_markers.Length} points (#{_surveyId})";
-            return string.IsNullOrEmpty(_invalidReason) ? "Real CP not set yet" : _invalidReason;
-        }
-    }
-
     /// <summary>Real CP の測定を受け付けられるか。受け付けられないなら理由を返す（空文字なら OK）。</summary>
     public string BlockReason
     {

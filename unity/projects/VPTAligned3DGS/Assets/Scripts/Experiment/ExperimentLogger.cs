@@ -74,16 +74,11 @@ public class ExperimentLogger : MonoBehaviour
     // PC へ送った行の通し番号。1 から連番。PC はこれで重複除去と ACK を行う。
     private uint _evSeq;
 
-    /// <summary>PC への未送達イベント数（HUD 用）。0 なら PC 側にデータが揃っている。</summary>
-    public int PendingUploads => udp != null ? udp.PendingEventCount : 0;
-
     // 試行（trial）: 1 回のアプリ起動に複数の独立試行を含められるようにする。
     // 旧実装は「1 起動 = 1 試行」前提だったが、E2 の 10 試行を毎回アプリ再起動で回すのは
     // 現実的でないため、ExperimentController がアプリ内で試行を切り替える（→ 各行に trial を付ける）。
     private int    _trial;
     private string _trialMode = "";
-    /// <summary>現在の試行番号（0 = 試行外）。</summary>
-    public int TrialId => _trial;
     // FPS 集計
     private int _frames; private float _sumDt; private float _maxDt; private float _winStart;
 

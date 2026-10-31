@@ -3,13 +3,13 @@
 
 使い方:
     # 同じ PC 内（サーバとファイアウォールの確認）
-    python test_send.py 127.0.0.1
+    python tools/test_send.py 127.0.0.1
 
     # 別端末から PC へ（ネットワーク経路の確認）。PC の IP を指定
-    python test_send.py 192.168.1.23
+    python tools/test_send.py 192.168.1.23
 
     # ブロードキャスト（Quest と同じ挙動の確認）
-    python test_send.py 255.255.255.255
+    python tools/test_send.py 255.255.255.255
 
 run.py を別ターミナルで起動した状態で実行し、
 サーバ側に "keyframe req=999 ..." が出れば経路は OK。

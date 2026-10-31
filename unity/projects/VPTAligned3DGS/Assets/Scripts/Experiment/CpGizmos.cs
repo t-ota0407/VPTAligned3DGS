@@ -458,8 +458,6 @@ public class CpGizmos
             for (int i = 0; i < _go.Length; i++) Clear(i);
         }
 
-        public bool Has(int i) => _go != null && i >= 0 && i < _go.Length && _go[i] != null;
-
         private Vector3 WorldOf(int i) =>
             _anchor[i] != null ? _anchor[i].TransformPoint(_pos[i]) : _pos[i];
 

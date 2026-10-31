@@ -238,8 +238,6 @@ server/
 ├─ setup_wsl.sh              WSL2 の CV 環境の構築（版を固定。再実行しても安全）
 ├─ launch_config.json        この PC の WSL ディストリ・venv（setup が書き、run.py が読む。.gitignore 済み）
 ├─ run.py                    エントリポイント（UDP 受信 → 再構成 → 保存 ＋ ビーコン ＋ Sim(3) 返送 ＋ GUI ＋ CV の起動）
-├─ test_send.py              疎通テスト用のダミー送信（Quest 不要）
-├─ rigs_probe.py             pycolmap の .rigs クラッシュを切り分ける最小再現スクリプト
 ├─ requirements.txt          受信・保存のコア依存（numpy / opencv / customtkinter）
 ├─ requirements-cv.txt       CV 依存（pycolmap==3.13.0 ほか。torch と hloc は setup_wsl.sh が入れる）
 ├─ constraints-cv.txt        CV の動作確認済みの版（setup_wsl.sh が pip の制約に使う）
@@ -253,6 +251,7 @@ server/
 │  ├─ paper_figure.py        上記 CSV → 論文用のベクタ図（段幅に合わせる）
 │  └─ tune_gates.py          ゲート閾値の掃引（歩き方ごとのロック率・誤差の模擬）
 ├─ tests/                    純粋計算・プロトコル整合のテスト（上記）
+├─ tools/test_send.py        疎通テスト用のダミー送信（Quest 不要。`python tools/test_send.py 127.0.0.1`）
 └─ vptserver/
    ├─ protocol.py            パケット定義と parse()
    ├─ reassembler.py         reqId ごとにチャンクを集約 → Keyframe

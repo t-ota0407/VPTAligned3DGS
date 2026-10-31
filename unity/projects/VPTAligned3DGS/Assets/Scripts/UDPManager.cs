@@ -151,7 +151,6 @@ public class UDPManager : MonoBehaviour
     private volatile string _pongJson;
     private PongMsg _pong = new PongMsg();
     private float  _rttMs = -1f;
-    private long   _lastBeaconTicks;
 
     private void Start()
     {
@@ -232,9 +231,6 @@ public class UDPManager : MonoBehaviour
     // ----------------------------------------------------------------
     // Public
     // ----------------------------------------------------------------
-
-    /// <summary>UTF-8 文字列を送信先へユニキャスト送信する。</summary>
-    public void Send(string message) => SendRaw(Encoding.UTF8.GetBytes(message));
 
     /// <summary>バイト配列を送信先へ送信する。</summary>
     public void SendRaw(byte[] data)
@@ -450,17 +446,6 @@ public class UDPManager : MonoBehaviour
     /// 「停止」と区別して「確認中」と見せるための判定。</summary>
     public bool CvUnknown => ServerAlive && _pong != null && !_pong.cv_alive && _pong.cv_age < 0f;
 
-    /// <summary>最後にビーコンを受けてからの秒数（-1 = 一度も受けていない）。
-    /// ブロードキャストが遮断される LAN では常に -1 になりうる（手動 IP 運用）。診断用。</summary>
-    public float SecondsSinceLastBeacon
-    {
-        get
-        {
-            long t = System.Threading.Interlocked.Read(ref _lastBeaconTicks);
-            return t == 0 ? -1f : (float)(DateTime.UtcNow - new DateTime(t)).TotalSeconds;
-        }
-    }
-
     /// <summary>送信先の説明（HUD 用）。疎通状態まで含める。
     /// **文言は英語で書く。** これは HUD の診断行にそのまま出るので、他の HUD 文言（すべて英語）と
     /// 混ざると読みにくい。ログやツールチップの日本語はそのままでよい（HUD には出ない）。
@@ -541,7 +526,6 @@ public class UDPManager : MonoBehaviour
                             port = buf[BeaconMagic.Length] | (buf[BeaconMagic.Length + 1] << 8);
                         _learnedPort = port;
                         _learnedIP   = remote.Address.ToString(); // メインスレッドが拾う
-                        System.Threading.Interlocked.Exchange(ref _lastBeaconTicks, DateTime.UtcNow.Ticks);
                         idleTicks = 0;
                     }
                 }

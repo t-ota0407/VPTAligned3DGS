@@ -91,7 +91,6 @@ public class ControllerTipCalibration : MonoBehaviour
     [SerializeField] private TipState state = TipState.None;
     // 前回セッションの保存値（参照用。校正完了時に差分を出して整合性チェックにする）
     private Vector3  _storedOffsetM;
-    private float    _storedResidualMm = -1f;
     private DateTime _storedUtc;
     private bool     _hasStored;
 
@@ -178,30 +177,6 @@ public class ControllerTipCalibration : MonoBehaviour
             // ボタンの割当は書かない。HUD が自前の配色で添える（AlignmentHud.Btn）ので、
             // ここに書くと同じ内容が二重に出るうえ、割当を変えたときに直し忘れる。
             return "Finish when ready, or keep going for a better fit";
-        }
-    }
-    /// <summary>先端オフセットの大きさ[m]（HUD 表示用）。</summary>
-    public float OffsetMagnitudeM => TipOffsetM.magnitude;
-
-    /// <summary>HUD 表示用の 1 行サマリ。</summary>
-    public string StatusLine
-    {
-        get
-        {
-            if (_running) return $"Calibrating {_pos.Count}/{minSamples}";
-            switch (state)
-            {
-                case TipState.Manual:     return $"Tip: manual {Fmt(manualOffsetM)}";
-                case TipState.Calibrated: return $"Tip: calibrated, residual {residualMm:F1} mm";
-                case TipState.Restored:
-                    string age = StoredAgeHours < 1f ? "under 1 h"
-                               : StoredAgeHours < 48f ? $"{StoredAgeHours:F0} h ago"
-                               : $"{StoredAgeHours / 24f:F0} d ago";
-                    return requireCalibrationEachSession
-                        ? $"Tip: previous session ({age}) — recalibrate"
-                        : $"Tip: reusing previous value ({age})";
-                default:                  return "Tip: not calibrated";
-            }
         }
     }
 
@@ -335,30 +310,7 @@ public class ControllerTipCalibration : MonoBehaviour
             ",\"pivot\":[" + c.x.ToString("F4", Inv) + "," + c.y.ToString("F4", Inv) + "," + c.z.ToString("F4", Inv) + "]");
 
         // 次回の差分比較の基準を更新する
-        _storedOffsetM = o; _storedResidualMm = residualMm; _storedUtc = DateTime.UtcNow; _hasStored = true;
-    }
-
-    /// <summary>前回セッションの保存値を、このセッションでも使うと明示的に宣言する（逃げ道）。
-    /// 校正し直す時間が無い場合の緊急手段。ログに残るので、解析側でこの測定を区別できる。</summary>
-    public void UseStoredCalibration()
-    {
-        if (!_hasStored) { Debug.LogWarning("[ControllerTipCalibration] 保存値がありません"); return; }
-        state = TipState.Calibrated;      // 以降このセッションでは校正済み扱い
-        Debug.LogWarning($"[ControllerTipCalibration] 前回値をこのセッションで使用します " +
-                         $"({Fmt(calibratedOffsetM)} 残差 {residualMm:F1}mm / {StoredAgeHours:F0}時間前)。" +
-                         "物理構成が前回と同じであることを確認してください。");
-        ExperimentLogger.LogStatic("tip_calib_reused",
-            "\"residual_mm\":" + residualMm.ToString("F2", Inv) +
-            ",\"age_h\":" + StoredAgeHours.ToString("F1", Inv));
-    }
-
-    public void ClearCalibration()
-    {
-        state = manualOffsetM.sqrMagnitude > 1e-9f ? TipState.Manual : TipState.None;
-        calibratedOffsetM = Vector3.zero; residualMm = -1f;
-        _hasStored = false; _storedResidualMm = -1f;
-        PlayerPrefs.DeleteKey(PrefKey); PlayerPrefs.Save();
-        Debug.Log("[ControllerTipCalibration] 校正結果を消去しました");
+        _storedOffsetM = o; _storedUtc = DateTime.UtcNow; _hasStored = true;
     }
 
     // ---------------- 数値計算（純粋関数・テスト可能） ----------------
@@ -505,7 +457,7 @@ public class ControllerTipCalibration : MonoBehaviour
         if (t.Length >= 5 && DateTime.TryParse(t[4], Inv, System.Globalization.DateTimeStyles.RoundtripKind,
                                                out DateTime saved))
             _storedUtc = saved;
-        _storedOffsetM = calibratedOffsetM; _storedResidualMm = residualMm; _hasStored = true;
+        _storedOffsetM = calibratedOffsetM; _hasStored = true;
 
         // **前回値は「復元済み」であって「校正済み」ではない。**
         // 今の物理構成に対応している保証がないので、既定ではこのままでは計測に使わせない。

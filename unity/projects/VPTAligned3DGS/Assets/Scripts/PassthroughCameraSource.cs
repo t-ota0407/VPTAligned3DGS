@@ -31,10 +31,6 @@ public class PassthroughCameraSource : MonoBehaviour
     [Header("Debug")]
     [SerializeField] private bool logStatus = true;
     [SerializeField] private float logIntervalSec = 1f;
-    [Tooltip("任意。状態を UDP でも送る（既定オフ。CV用キーフレームと同チャンネルを汚さないため）。")]
-    [SerializeField] private bool sendStatusOverUdp = false;
-    [Tooltip("sendStatusOverUdp=true のときの送信先。")]
-    [SerializeField] private UDPManager udpManager;
 
     public bool IsReady => pca != null && pca.IsPlaying;
     public Texture CurrentTexture { get; private set; }
@@ -92,10 +88,8 @@ public class PassthroughCameraSource : MonoBehaviour
         if (logStatus && Time.time >= _nextLog)
         {
             _nextLog = Time.time + logIntervalSec;
-            string msg = $"[PassthroughCameraSource] playing={pca.IsPlaying} res={pca.CurrentResolution} " +
-                         $"posePos={CurrentPose.position} ts={CurrentTimestamp:HH:mm:ss.fff}";
-            Debug.Log(msg);
-            if (sendStatusOverUdp && udpManager != null) udpManager.Send(msg); // 既定オフ
+            Debug.Log($"[PassthroughCameraSource] playing={pca.IsPlaying} res={pca.CurrentResolution} " +
+                      $"posePos={CurrentPose.position} ts={CurrentTimestamp:HH:mm:ss.fff}");
         }
     }
 

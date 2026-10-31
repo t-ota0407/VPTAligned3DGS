@@ -45,7 +45,7 @@ VPTAligned3DGS を**セットアップし、実機で動かし、評価実験を
 ```
 
 主な自作コード:
-- Quest 側 `unity/projects/VPTAligned3DGS/Assets/Scripts/`：`AlignmentManager`（位置合わせ）, `UDPManager`（通信）, `KeyframeUploader`（送信）, `AnchorPersistence`（永続化）, `GaussianSplatController`（表示）, `AlignmentHud`（HUD）, `IKTargetManager` / `AvatarVisibility`（アバター）。
+- Quest 側 `unity/projects/VPTAligned3DGS/Assets/Scripts/`：`AlignmentManager`（位置合わせ）, `UDPManager`（通信）, `KeyframeUploader`（送信）, `AnchorPersistence`（永続化）, `GaussianSplatController`（表示）, `AlignmentHud`（HUD）。
 - 評価用 `Assets/Scripts/Experiment/`：`ExperimentController`（試行制御・リセット）, `ExperimentLogger`（JSONL 記録）, `ControlPointMeasure`（**Real CP**＝実物側の位置の実測。実験前に 1 回。HUD `Set Real CP`）, `ControlPointEdit`（**Virtual CP**＝モデル側 CP の VR 内での置き直し。位置合わせ前のみ。HUD `Edit Virtual CP`）, `CpGizmos`（CP の球・ラベル描画）, `ControllerTipCalibration`（先端校正）, `ControlPointStore`（CP の受け渡し形式）。Editor 側は `Assets/Editor/ControlPointToolWindow.cs`。→ §9
 - Quest 側の監視: `TrackingOriginWatcher`（ワールド原点の移動検出 → §7-5）。
 - PC 側 `server/vptserver/`：`udp_receiver`/`beacon`/`storage`（受信系）, `cv/`（`localize`, `geometry`, `gates`, `hloc_db`）。集計は `server/analysis/`（主結果は `experiment_report.py`、健全性チェックは `analyze_experiments.py` → §9-3・§9-4）。
@@ -249,20 +249,6 @@ python -m vptserver.cv.hloc_db --scene scene_data/<name>       # 例: scene_data
 誤爆一発で試行の測定が無効になるため。Inspector から明示的に切る）。
 
 > **入力の左右指定**: グリップ・スティック・トリガーは利き手設定で左右が入れ替わる `Primary/Secondary` ではなく、**明示的な `RawAxis*/RawButton` の L/R** を使う（実装＝この表で確定）。A/B/X/Y は左右固定で曖昧さなし。
-
-### 5-1b. アバターの表示/非表示（`AvatarVisibility`）
-
-シーンの `Avatar` に付いている `AvatarVisibility` の **Show Avatar** チェックで切り替える。
-Editor では操作した瞬間に反映され（Play 中・Edit 中どちらでも）、状態はシーンに保存される。
-実行時は `SetVisible(bool)` / `Toggle()` から。
-
-| Hide Mode | 挙動 | 使いどころ |
-|---|---|---|
-| `RenderersOnly`（既定）| Renderer だけ切る。IK は回り続ける | 再表示が即座で姿勢も崩れない。通常はこちら |
-| `DeactivateObject` | GameObject ごと切る。IK/Animator も止まる | 負荷を下げたいとき。再表示直後の 1 フレームは姿勢が落ち着かないことがある |
-
-> **Real CP の測定中は消しておくのが無難。** 実物の点をコントローラ先端で触るとき、仮想の腕が
-> 実際の腕に重なって描画されると接触点が隠れて狙いが甘くなる。測定値に直接効く。
 
 ### 5-2. HUD（`AlignmentHud`）
 
@@ -759,8 +745,6 @@ Editor でのマウス配置は**視線方向の奥行きに歯止めが無い**
 
    先端校正が終わってから行う（未校正だと HUD が `Cannot set Real CPs yet` で止める）。
 
-   0. **アバターを非表示にしておく**（`Avatar` の `AvatarVisibility` → Show Avatar のチェックを外す）。
-      仮想の腕が実際の腕に重なると接触点が隠れ、狙いが甘くなる（→ §5-1b）。
    1. **A ボタン**（または HUD の `Set Real CP`）で開始。HUD が**紫**の
       `SET REAL CONTROL POINTS` になり、**スプラットが自動で消える**（ここで見るべきは実環境だけで、
       位置合わせ前のスプラットは先端を当てたい実物そのものを覆い隠す → §5-3）。
@@ -1031,7 +1015,7 @@ Real CP の測定は 1 回きりで**全試行が道連れになる**ので、�
 | `Could not align: … path too straight …` | 一直線に歩いた | 曲がりながら（弧を描いて）歩いて再試行 |
 | `Could not align: the PC recognized only N of M keyframes` | 画像が照合できていない | 照明を撮影時に近づける。模様の無い壁ばかり見ない。PC のシーン（`--scene`）が合っているか確かめる |
 | `Could not align: the solutions did not agree …` | 解が安定しなかった | より大きく部屋を回って再試行 |
-| `Could not align: the PC server stopped responding (run.py)` / `the CV worker stopped (localize)` | 途中で `run.py` / `localize` が終了した（落ちた） | `start_demo.bat` のウインドウ（`[cv]` の行・`received_demo/cv.log`）を確かめる。`localize` は自動で起動し直すので、少し待って再試行。`run.py` が落ちていれば `start_demo.bat` で起動し直す |
+| `Could not align: the PC server stopped responding (run.py)` / `the CV worker stopped …` | 途中で `run.py` / `localize` が終了した（落ちた） | `start_demo.bat` のウインドウ（`[cv]` の行・`received_demo/cv.log`）を確かめる。`localize` は自動で起動し直すので、少し待って再試行。`run.py` が落ちていれば `start_demo.bat` で起動し直す |
 | `Could not align: the CV worker is not running for this folder …` | `localize` が起動していない、または `run.py` と別のフォルダを見ている | `start_demo.bat` で起動する（`--watch` が自動で合う）。手で動かしているなら `run.py --out X` と `localize --watch X` を同じにし、**最新の `localize` に入れ替える**（古い版だと前の処理の片付け中を見分けられない） |
 | `Could not align: the CV worker is not processing this session …` | `localize` は動いているが、このセッションのキーフレームを処理していない | 同上（手で動かしたときの `--out` と `--watch` の食い違いが典型） |
 | `Could not align: the PC seems stuck …` | 15 分間 1 枚も処理が終わらない | `start_demo.bat` のウインドウを閉じて起動し直す（`localize` も起動し直る）。下の「PC が遅い」も見る |

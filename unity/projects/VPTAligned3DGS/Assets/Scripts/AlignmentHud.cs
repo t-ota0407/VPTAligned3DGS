@@ -834,8 +834,8 @@ public class AlignmentHud : MonoBehaviour
         if (udp != null && udp.CvBusy)
             return $"CV is processing {udp.CvBusyCount} keyframes — wait for it to finish";
         if (udp != null && udp.CvUnknown)
-            return "Waiting for CV status — if this persists, check localize";
-        if (!exp.CvReady)     return "CV worker not running — start vptserver.cv.localize";
+            return "Waiting for CV status — if this persists, check the run.py window";
+        if (!exp.CvReady)     return "CV worker not running — check the [cv] lines in the run.py window";
         if (!exp.PointsReady) return "No Virtual CP — place them in the Editor";
         if (!exp.SurveyReady)
         {

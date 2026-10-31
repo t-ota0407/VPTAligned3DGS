@@ -57,7 +57,6 @@ Meta Quest 3 のビデオパススルー（VPT）と 3D Gaussian Splatting（3DG
 | **COLMAP シーン**（`server/scene_data/`） | 1 シーンあたり 1〜7 GB | 3DGS の学習に使った COLMAP 再構成（`sparse/0` ＋ `images/`）をそのまま置く |
 | **hloc** と CV の Python 環境（WSL2） | 別リポジトリ・数 GB | `server\setup_windows.bat` が入れる（hloc はコミット `c13273b` に固定し、WSL2 の `~/hloc` に置く） |
 | **実験の受信データ**（`server/received/`） | 実行時に自動生成 | `run.py` が起動ごとに `session_<時刻>/` を作成 |
-| **Final IK / アバター** | Unity Asset Store の有償アセットで再配布不可 | 位置合わせの本筋には不要。使う場合は別途購入して `Assets/Plugins/RootMotion/` に配置 |
 
 ---
 

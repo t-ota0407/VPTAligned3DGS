@@ -175,7 +175,6 @@ public class AnchorPersistence : MonoBehaviour
     public float WorstDisagreementM { get; private set; } = -1f;
     /// <summary>スタッフの強制表示（一致の確認なし）で採用中か。</summary>
     public bool IsForced => _forceSingle;
-    public bool IsSaving => _saving;
     public bool HasSave => _savedCount > 0;
     /// <summary>復元を始めてからの秒数（始めていなければ負）。</summary>
     public float SearchElapsedS => _searchStartT < 0f ? -1f : Time.realtimeSinceStartup - _searchStartT;

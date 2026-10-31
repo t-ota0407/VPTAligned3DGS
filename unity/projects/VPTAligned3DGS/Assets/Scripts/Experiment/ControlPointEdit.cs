@@ -153,19 +153,6 @@ public class ControlPointEdit : MonoBehaviour
         }
     }
 
-    /// <summary>HUD 表示用の 1 行サマリ。</summary>
-    public string StatusLine
-    {
-        get
-        {
-            if (_running)
-                return (_hasPending ? $"Confirm {CurrentLabel}?" : $"Editing {CurrentLabel}")
-                       + $" ({_edited.Count}/{MarkerCount} moved)";
-            if (_edited.Count > 0) return $"{_edited.Count} Virtual CP(s) edited this session";
-            return "Virtual CPs as built";
-        }
-    }
-
     /// <summary>置き直しの結果が怪しいときの警告（HUD 用）。空なら問題なし。</summary>
     public string MoveWarning
     {

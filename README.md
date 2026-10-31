@@ -72,7 +72,6 @@ Only code and documentation are versioned here. The following must be supplied s
 | **COLMAP scene** (`server/scene_data/`) | 1–7 GB per scene | Drop in the COLMAP reconstruction used to train the 3DGS (`sparse/0` + `images/`) |
 | **hloc** and the CV Python environment (WSL2) | Separate repository, several GB | Installed by `server\setup_windows.bat` (hloc pinned to commit `c13273b`, cloned to `~/hloc` inside WSL2) |
 | **Experiment capture data** (`server/received/`) | Generated at runtime | `run.py` creates `session_<timestamp>/` on every launch |
-| **Final IK / avatar** | Paid Unity Asset Store assets, redistribution not permitted | Not required for alignment itself. If needed, purchase separately and place under `Assets/Plugins/RootMotion/` |
 
 ---
 

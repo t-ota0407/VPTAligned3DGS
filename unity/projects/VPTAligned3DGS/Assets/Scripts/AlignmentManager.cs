@@ -1,14 +1,16 @@
 using UnityEngine;
 
 /// <summary>
-/// VPT ⇄ 3DGS 位置合わせマネージャ（M1: 手動位置合わせ）。
+/// VPT ⇄ 3DGS 位置合わせマネージャ。3DGS ルート Transform（GaussianSplats）の姿勢
+/// （相似変換 T_{m→w}: 位置・回転・符号付き等方スケール）は、すべてここを通して書き換える。
 ///
-/// 役割: 3DGS ルート Transform（GaussianSplats）に対する相似変換 T_{m→w}
-///       （位置・ヨー回転・等方スケール）を、Quest コントローラで人手で調整・確定する。
-///       これは Specification.md の Stage E（手動フォールバック）/ M1 に相当し、
-///       後続の自動位置合わせ（Depth/MRUK→外観ベース）の初期姿勢供給にもなる。
+/// 姿勢が変わる経路は 3 つ:
+///   - 自動位置合わせ … PC の Sim(3)（<see cref="UDPManager.OnSim3Result"/>）を健全性と改悪防止で採否し、
+///                       連続一致で確定する（→ ImplementationSpec.md §5）。確定で <see cref="OnAutoAligned"/>。
+///   - アンカー追従   … [[AnchorPersistence]] が保存済みアンカーから再構成した姿勢（<see cref="IsAnchored"/> の間だけ）。
+///   - 手動操作       … Touch コントローラ（下表。Specification.md の Stage E / 手動フォールバック）。
 ///
-/// 操作（Touch コントローラ / OVRInput）:
+/// 手動操作（Touch コントローラ / OVRInput）:
 ///   右スティック        : 頭の向き基準で水平移動（前後・左右）
 ///   左スティック Y       : 垂直移動（上下）
 ///   左スティック X       : ヨー回転（頭の位置を軸に world を回す）
@@ -20,11 +22,9 @@ using UnityEngine;
 ///   右スティック押込      : 目の前に呼び寄せ（Recenter）
 ///   左スティック押込      : 水平化＋床スナップ（Auto-level / M2）
 ///
-/// 受付範囲は <see cref="PoseControls"/> で切り替わる。CP 測量中は SticksOnly になり、
-/// スティック操作（移動・ヨー・呼び寄せ・水平化）だけが残る。表示トグル X は常に効く。
-///
-/// 注意: 本クラスは「手動で T を決める」ところまで。空間アンカー保存(Stage F)・
-///       自動初期化(Stage B/C)・連続追従(Stage D) は後続マイルストンで追加する。
+/// 受付範囲は <see cref="PoseControls"/> で切り替わる（実験・デモが局面に応じて毎フレーム設定する）。
+/// CP 測量・編集中は SticksOnly になり、スティック操作（移動・ヨー・呼び寄せ・水平化）だけが残る。
+/// 表示トグル X は常に効く。
 /// </summary>
 public class AlignmentManager : MonoBehaviour
 {
@@ -37,12 +37,8 @@ public class AlignmentManager : MonoBehaviour
     [Tooltip("頭（CenterEyeAnchor）。未設定なら Camera.main を使用。移動の基準・回転/スケールの Pivot。")]
     [SerializeField] private Transform headAnchor;
 
-    [Tooltip("任意。確定時のログ送信に使う（なくても可）。")]
+    [Tooltip("PC から届く Sim(3)（自動位置合わせの結果）の受信元。未設定なら自動取得。")]
     [SerializeField] private UDPManager udpManager;
-
-    [Tooltip("ALIGN_LOCK/ALIGN_TOGGLE 等のデバッグ文字列を UDP 送信する（既定オフ。" +
-             "CV用キーフレームと同チャンネルを汚さないため）。")]
-    [SerializeField] private bool sendDebugOverUdp = false;
 
     [Tooltip("3DGS の表示/非表示トグルに使う。未設定なら自動取得。")]
     [SerializeField] private GaussianSplatController splatController;
@@ -155,13 +151,6 @@ public class AlignmentManager : MonoBehaviour
     /// ExperimentController が局面に応じて毎フレーム設定する（<c>ApplyInputMode</c>）。</summary>
     public PoseControlMode PoseControls { get; set; } = PoseControlMode.Full;
 
-    /// <summary><see cref="PoseControls"/> の従来 API（true = Locked / false = Full）。</summary>
-    public bool PoseControlsLocked
-    {
-        get => PoseControls == PoseControlMode.Locked;
-        set => PoseControls = value ? PoseControlMode.Locked : PoseControlMode.Full;
-    }
-
     [Header("State (debug)")]
     [SerializeField] private AlignState state = AlignState.Adjusting;
     public AlignState State => state;
@@ -236,7 +225,7 @@ public class AlignmentManager : MonoBehaviour
         // Start でここから上書きすれば実行順に依らず確実に効く（Start どうしの順序は不定）。
         if (startHidden) SetSplatVisible(false);
 
-        Debug.Log("[AlignmentManager] M1 manual alignment ready. state=" + state
+        Debug.Log("[AlignmentManager] ready. state=" + state
                   + " visible=" + _splatVisible);
     }
 
@@ -554,8 +543,6 @@ public class AlignmentManager : MonoBehaviour
         state = AlignState.Locked;
         Debug.Log($"[AlignmentManager] LOCK  pos={splatRoot.position} rotY={splatRoot.eulerAngles.y:F1} scale={splatRoot.localScale.x:F3}");
         OnLocked?.Invoke(splatRoot.position, splatRoot.rotation, splatRoot.localScale);
-        if (sendDebugOverUdp && udpManager != null)
-            udpManager.Send($"ALIGN_LOCK pos={splatRoot.position} rot={splatRoot.rotation.eulerAngles} scale={splatRoot.localScale.x:F4}");
     }
 
     public void Unlock()
@@ -639,7 +626,6 @@ public class AlignmentManager : MonoBehaviour
         if (splatController != null) { if (_splatVisible) splatController.Show(); else splatController.Hide(); }
         else if (splatRoot != null) splatRoot.gameObject.SetActive(_splatVisible); // フォールバック
         Debug.Log("[AlignmentManager] 3DGS visible = " + _splatVisible);
-        if (sendDebugOverUdp && udpManager != null) udpManager.Send("ALIGN_TOGGLE visible=" + _splatVisible);
     }
 
     private Coroutine _fadeCo;
