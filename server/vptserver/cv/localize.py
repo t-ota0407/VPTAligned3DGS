@@ -18,6 +18,7 @@ geometry.solve_sim3_ransac に渡すと、splatRoot に与える Sim(3)（反射
   python -m vptserver.cv.localize --scene scene_data/example1 --selftest 8
 """
 import argparse
+import json
 import logging
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from ..scenes import (FEATURE_CONF, MATCHER_CONF, RETRIEVAL_CONF,
 logging.basicConfig(level=logging.INFO, format="[localize] %(message)s")
 log = logging.getLogger("localize")
 
+
 def _imports():
     try:
         import pycolmap  # noqa
@@ -43,7 +45,6 @@ def _imports():
 
 def read_active_cv_config(base_dir):
     """received 配下の最新 session_*/cv.json（run.py が書く設定）を読む。無ければ {}。"""
-    import json
     base = Path(base_dir)
     subs = sorted(d for d in base.glob("session_*") if d.is_dir())
     if not subs:
@@ -251,8 +252,6 @@ class Localizer:
         各 .json は META（w,h,sw,sh,fx..cy=K@sensor, px,py,pz=Quest world 位置, ...）。
         返り値: dict(sim3=solve結果 or None, per_kf=[...])。
         """
-        import json
-        from ..keyframe import k_for_image_from_meta
         received = Path(received_dir)
         work = Path(work or (self.hloc / "align_work"))
 
@@ -260,26 +259,16 @@ class Localizer:
         if not metas:
             log.warning("キーフレームが無い: %s", received); return dict(sim3=None, per_kf=[])
 
-        import cv2
         names, intr, world_c = [], {}, {}
         for mp in metas:
-            jpg = mp.with_suffix(".jpg")
-            if not jpg.exists():
-                continue
-            if cv2.imread(str(jpg)) is None:   # 壊れた/ダミー画像（test_send 等）はスキップ
-                log.info("読み込めない画像をスキップ: %s", jpg.name)
-                continue
             try:
-                m = json.loads(mp.read_text())
-                K = k_for_image_from_meta(m)
-                px, py, pz = m["px"], m["py"], m["pz"]
-            except Exception as e:
-                log.info("META 不正をスキップ: %s (%s)", mp.name, e)
+                nm, intr[nm], world_c[nm], _ = read_keyframe(mp)   # world_c: Quest world 中心
+            except FileNotFoundError:
                 continue
-            nm = jpg.name
+            except ValueError as e:                               # 壊れた/ダミー画像・META 不正
+                log.info("スキップ: %s", e)
+                continue
             names.append(nm)
-            intr[nm] = (int(m["w"]), int(m["h"]), K[0, 0], K[1, 1], K[0, 2], K[1, 2])
-            world_c[nm] = np.array([px, py, pz], dtype=float)  # Quest world 中心
 
         log.info("キーフレーム %d 枚をローカライズ…", len(names))
         est = self.localize(received, names, intr, work)
@@ -305,213 +294,272 @@ class Localizer:
         - 新セッションが現れたら状態をリセット（別セッション＝別ワールド座標系のため混ぜない）。
         - 累計成功が min_kf 以上＆前回解法から every 枚増えたら Sim(3) を解いて result を更新。
         out_result を指定するとセッションに関係なくその固定パスへ書く（通常は指定しない）。
+        1 周の中身は _Watcher.step()。
         """
-        import json
-        import time
-        import cv2
-        from ..keyframe import k_for_image_from_meta
-        base = Path(base_dir)
-
-        def active_session():
-            subs = sorted(d for d in base.glob("session_*") if d.is_dir())
-            return subs[-1] if subs else base   # 最新セッション、無ければ base 自身（後方互換）
-
-        cur = None
-        work = self.hloc / "watch_work"       # セッション切替時にセッション別へ差し替える
-        # Cc/Cw: 解法バッファ（P2-b でウィンドウ化）／total_ok: 累計採用数（再計算タイミングの基準）
-        processed, Cc, Cw, total_ok, last_solved, out_path = set(), [], [], 0, 0, None
-        # done_n: このセッションで処理し終えたキーフレーム数（採否を問わない。解き直しまで済んだ分）。
-        # Quest のデモは「送信を止めてから PC が全部処理し終えたか」をこれで判定する
-        # （busy だけだと「届いたがまだ処理を始めていない」瞬間を「終わった」と取り違える）。
-        done_n = 0
-        cv_mtime = None
-        gate_cfg = {}                    # cv.json 由来の品質ゲート設定（P1・欠損は既定）
-        window = 24                      # P2-b: 直近 N 件のみで解く（0=無制限）。cv.json で上書き
-
-        last_solve = {}                  # 直近の解の統計と採否理由（Quest まで届ける）
+        import threading
+        from .heartbeat import Heartbeat
 
         # 生存信号（ハートビート）は別スレッドが 2 秒ごとに書く（→ heartbeat.py）。
         # run.py だけ動いていて WSL2 の CV が未起動、という状態は外から見分けがつかない。
         # キーフレームは届いて保存されるのに Sim(3) が永遠に返らないので、これを Quest に伝える。
         # **hloc の処理中もスレッドが書き続ける**ので、生存信号の鮮度は PC の速さに依存しない
         # （メインループからしか書かなかった頃は、遅い PC で正常な処理中を「停止」と誤判定された）。
-        from .heartbeat import Heartbeat
-        import threading
         stop = stop_event if stop_event is not None else threading.Event()   # 起動元が終わったら立つ（lifecycle.py）
-        hb = Heartbeat(base, self.scene_str)
+        hb = Heartbeat(Path(base_dir), self.scene_str)
         hb.start()
+        w = _Watcher(self, base_dir, every, min_kf, out_result, thresh_m, hb)
         log.info("watch 開始: base=%s every=%d min=%d window=%d（最新 session_* を自動追従・cv.json を即時反映）",
-                 base, every, min_kf, window)
+                 w.base, every, min_kf, w.window)
         try:
             while not stop.is_set():
-                act = active_session()
-                if act != cur:                   # セッション切替（または初回）→ リセット
-                    cur = act
-                    processed, Cc, Cw, total_ok, last_solved = set(), [], [], 0, 0
-                    done_n = 0
-                    out_path = Path(out_result) if out_result else (cur / "result_sim3.json")
-                    cv_mtime = None              # 新セッションの cv.json を読み直す
-                    # 新セッションへ即ハートビートを書く（前のセッションの進み具合は持ち越さない）
-                    hb.reset_session(cur)
-                    hb.update(busy=False, busy_n=0, window=0, total_ok=0, done=0)
-                    hb.write_now()
-                    # **作業ディレクトリはセッションごとに分ける。**
-                    # キーフレームは試行ごとに req_000001 から振り直されるため、共有ディレクトリだと
-                    # hloc が「その名前は抽出済み」と判断して前セッションの画像特徴を使い回す。
-                    # 姿勢だけが新しくなるので対応が総崩れになり、インライアが 3/24 まで落ちる。
-                    work = self.hloc / "watch_work" / cur.name
-                    prune_work_dirs(self.hloc / "watch_work", keep=8)
-                    last_solve = {}              # 前セッションの採否理由を持ち越さない
-                    log.info("セッション追従: %s （結果→ %s）",
-                             cur.name if cur != base else "(base)", out_path)
-
-                # cv.json をライブ反映（GUI/run.py の変更が即効く）
-                cj = cur / "cv.json"
-                if cj.exists():
-                    try:
-                        mt = cj.stat().st_mtime
-                        if mt != cv_mtime:
-                            cv_mtime = mt
-                            cfg = json.loads(cj.read_text())
-                            gate_cfg = cfg               # 品質ゲートしきい値もライブ反映
-                            ne, nm = int(cfg.get("every", every)), int(cfg.get("min", min_kf))
-                            nwin = int(cfg.get("window", window))
-                            ns = cfg.get("scene")
-                            if ns and ns != self.scene_str:     # scene 変更 → DB 再ロード＆蓄積リセット
-                                log.info("scene 変更 → 再ロード: %s", ns)
-                                self.load_scene(ns)
-                                hb.set_scene(self.scene_str)
-                                processed, Cc, Cw, total_ok, last_solved = set(), [], [], 0, 0
-                                done_n = 0
-                            if (ne, nm, nwin) != (every, min_kf, window):
-                                log.info("設定更新(cv.json): every %d→%d, min %d→%d, window %d→%d",
-                                         every, ne, min_kf, nm, window, nwin)
-                            every, min_kf, window = ne, nm, nwin
-                    except Exception:
-                        pass
-
-                # **処理済み判定はファイル名 + 更新時刻**で行う。
-                # キーフレーム名は試行ごとに req_000001 から振り直されるため、万一同じセッション
-                # フォルダが再利用されるとファイルが上書きされる。名前だけで判定していると
-                # 「既に処理した」と誤認して新しい試行のデータを一枚も読まなくなる（実機で発生）。
-                todo = []
-                for m in sorted(cur.glob("req_*.json")):
-                    try:
-                        key = (m.name, m.stat().st_mtime_ns)
-                    except OSError:
-                        continue
-                    if key not in processed:
-                        todo.append((m, key))
-
-                names, intr, world, meta_of = [], {}, {}, {}
-                for m, key in todo:
-                    processed.add(key)
-                    jpg = m.with_suffix(".jpg")
-                    if not jpg.exists() or cv2.imread(str(jpg)) is None:
-                        continue
-                    try:
-                        meta = json.loads(m.read_text())
-                        K = k_for_image_from_meta(meta)
-                    except Exception:
-                        continue
-                    nm = jpg.name
-                    names.append(nm)
-                    intr[nm] = (int(meta["w"]), int(meta["h"]), K[0, 0], K[1, 1], K[0, 2], K[1, 2])
-                    world[nm] = np.array([meta["px"], meta["py"], meta["pz"]], dtype=float)
-                    meta_of[nm] = meta
-
-                if names:
-                    # 処理に入る直前に「busy」を立ててすぐ書く。hloc は数秒〜数分ブロックするが、
-                    # その間もハートビートのスレッドが busy=True のまま書き続ける。
-                    # busy は解き直しが終わって処理済み枚数を更新するまで下ろさない（下）。
-                    hb.update(busy=True, busy_n=len(names))
-                    hb.write_now()
-                    est = self.localize(cur, names, intr, work)
-                    ok, rej = 0, 0
-                    for nm in names:
-                        rec = est.get(nm)
-                        acc, why = (False, "ローカライズ失敗") if rec is None else \
-                            gates.should_accept_kf(rec["num_inliers"], gate_cfg)
-                        # **各キーフレームの結果を残す**。これが無いと、あとから
-                        # 「最初の t 秒分だけで解いたらどうなるか」を再現できず、
-                        # 収集時間と精度の関係（評価の主結果）が引けない。hloc の再実行は高価。
-                        append_kf_result(cur, nm, meta_of.get(nm, {}), rec, acc, why,
-                                         world.get(nm))
-                        if rec is None:
-                            log.info("KF棄却: %s ローカライズ失敗", nm)
-                            rej += 1
-                            continue
-                        if not acc:               # P1-a: 低インライア KF は蓄積しない
-                            log.info("KF棄却: %s %s", nm, why)
-                            rej += 1
-                            continue
-                        Cc.append(rec["center"]); Cw.append(world[nm]); total_ok += 1; ok += 1
-                        if window > 0 and len(Cc) > window:   # P2-b: 古い KF を捨てて直近 N 件に保つ
-                            del Cc[0]; del Cw[0]
-                    log.info("[%s] 新着 %d 枚（採用 %d 棄却 %d）／累計 %d 窓 %d",
-                             cur.name, len(names), ok, rej, total_ok, len(Cc))
-
-                # 処理済み枚数（画像が欠けて読めなかった分も数える。二度と処理されないので、待ち続けないように）。
-                # ハートビートへ渡すのは**解き直しの後**（下）。ハートビートは別スレッドが 2 秒ごとに書くので、
-                # ここで渡すと「処理済み」が先に Quest へ届き、結果がまだ無いのに「処理し終えた」と判定される。
-                done_n += len(todo)
-                solved_now = False
-
-                if len(Cc) >= min_kf and (total_ok - last_solved) >= every:
-                    solved_now = True
-                    last_solved = total_ok
-                    hand = gate_cfg.get("handedness", -1)
-                    res = solve_alignment(Cc, Cw, thresh_m=thresh_m,
-                                          handedness=(None if hand in (0, None) else int(hand)))
-                    nin = int(res["inliers"].sum())
-                    pub, why = gates.should_publish(       # P1-a: 解の公開ゲート
-                        res["sigma"], nin, len(Cc), res["rmse_m"],
-                        gate_cfg, cond=res["cond"])
-                    # 採否と統計を記録し、ハートビート経由で Quest まで届ける
-                    last_solve = {
-                        "solve_n": len(Cc), "solve_inliers": nin,
-                        "solve_ratio": round(nin / max(1, len(Cc)), 3),
-                        "solve_rmse": round(float(res["rmse_m"]), 4),
-                        "solve_sigma": round(float(res["sigma"]), 4),
-                        "solve_baseline": round(res["cond"]["baseline"], 2),
-                        "solve_extent2": round(res["cond"]["extent2"], 2),
-                        "solve_published": bool(pub),
-                        "solve_why": why,
-                    }
-                    # **終盤のキーフレームだけ残差が跳ね上がっていないか。**
-                    # Quest のワールド原点が収集の途中で動くと、そこから先のキーフレームは
-                    # 別座標系になる。RANSAC が古い側を採るので rmse も インライア率も
-                    # 悪化せず、数値だけ見ていると気づけない。実機で 24 枚中の最後の 4 枚が
-                    # 0.4→0.8→1.9→2.8 m と伸びる形で発生した（試行内で原点が飛んだ）。
-                    tail = tail_residual_m(res, Cc, Cw)
-                    if tail is not None and tail > 0.20:
-                        log.error("終盤のキーフレーム残差が %.2f m あります。収集中に Quest の"
-                                  " トラッキング原点が動いた可能性が高く、この試行は使えません"
-                                  "（analysis/check_tracking.py で確認できます）。", tail)
-
-                    if pub:
-                        write_result_json(res, out_path, len(Cc))
-                        log.info("Sim(3) 更新 → %s（%s / run.py が Quest へ返送）", out_path, why)
-                    else:
-                        log.warning("Sim(3) 非公開（ゲート不合格）: %s "
-                                    "[n=%d inliers=%d rmse=%.4f scale=%+.3f 間隔=%.2f 広がり=%.2f]",
-                                    why, len(Cc), nin, res["rmse_m"], res["sigma"],
-                                    res["cond"]["baseline"], res["cond"]["extent2"])
-
-                # 進み具合をハートビートへ（結果ファイルを書いた後なので、Quest が done を見た時点で
-                # 解き直しも済んでいる）。直近の解の採否理由も載せる — これが無いと「なぜロックしないか」が
-                # WSL2 のターミナルにしか出ず、実機側からは原因が分からない。
-                hb.update(busy=False, busy_n=0, window=len(Cc), total_ok=total_ok, done=done_n,
-                          **last_solve)
-                if names or solved_now:
-                    hb.write_now()       # 採否・処理済みを即座に反映（定期書き込みを待たない）
-
+                w.step()
                 stop.wait(poll)          # time.sleep の代わり（起動元が終わればすぐ抜ける）
             log.info("watch 終了")
         except KeyboardInterrupt:
             log.info("watch 終了")
         finally:
             hb.stop()
+
+
+def read_keyframe(meta_path):
+    """キーフレーム 1 枚（req_*.json の META と対の .jpg）を、ローカライズの入力に読む。
+
+    返り値: (画像名, (w, h, fx, fy, cx, cy), Quest ワールドのカメラ中心, META)。
+    画像が無いときは FileNotFoundError、読めないとき（壊れた画像・tools/test_send.py のダミー・
+    META の欠け）は ValueError（理由つき）。
+    """
+    import cv2
+    from ..keyframe import k_for_image_from_meta
+    meta_path = Path(meta_path)
+    jpg = meta_path.with_suffix(".jpg")
+    if not jpg.exists():
+        raise FileNotFoundError(jpg.name)
+    if cv2.imread(str(jpg)) is None:
+        raise ValueError(f"読み込めない画像: {jpg.name}")
+    try:
+        meta = json.loads(meta_path.read_text())
+        K = k_for_image_from_meta(meta)
+        intr = (int(meta["w"]), int(meta["h"]), K[0, 0], K[1, 1], K[0, 2], K[1, 2])
+        center = np.array([meta["px"], meta["py"], meta["pz"]], dtype=float)
+    except Exception as e:
+        raise ValueError(f"META 不正: {meta_path.name} ({e})")
+    return jpg.name, intr, center, meta
+
+
+class _WatchSession:
+    """watch が 1 セッション（= 1 つの Quest ワールド座標系）について持つ状態。
+    新しいセッションへ移るときは作り直す（別座標系のキーフレームを混ぜない）。"""
+
+    def __init__(self, path, out_path, work):
+        self.path = path
+        self.out_path = out_path     # 結果（result_sim3.json）の書き出し先
+        # **作業ディレクトリはセッションごとに分ける。**
+        # キーフレームは試行ごとに req_000001 から振り直されるため、共有ディレクトリだと
+        # hloc が「その名前は抽出済み」と判断して前セッションの画像特徴を使い回す。
+        # 姿勢だけが新しくなるので対応が総崩れになり、インライアが 3/24 まで落ちる。
+        self.work = work
+        self.cv_mtime = None         # 最後に読んだ cv.json の更新時刻（新セッションでは読み直す）
+        self.last_solve = {}         # 直近の解の統計と採否理由（Quest まで届ける。前セッションのは持ち越さない）
+        self.clear()
+
+    def clear(self):
+        """蓄積を捨てる（新しいセッション・シーンの変更）。"""
+        self.processed = set()       # 処理済みのキーフレーム（名前 + 更新時刻）
+        self.Cc, self.Cw = [], []    # 解法バッファ（P2-b でウィンドウ化）
+        self.total_ok = 0            # 累計採用数（再計算タイミングの基準）
+        self.last_solved = 0
+        # done_n: このセッションで処理し終えたキーフレーム数（採否を問わない。解き直しまで済んだ分）。
+        # Quest のデモは「送信を止めてから PC が全部処理し終えたか」をこれで判定する
+        # （busy だけだと「届いたがまだ処理を始めていない」瞬間を「終わった」と取り違える）。
+        self.done_n = 0
+
+
+class _Watcher:
+    """Localizer.watch の 1 周ぶんの処理（step）と、セッションをまたいで持つ設定。"""
+
+    def __init__(self, loc, base_dir, every, min_kf, out_result, thresh_m, hb):
+        self.loc = loc
+        self.base = Path(base_dir)
+        self.every, self.min_kf = every, min_kf
+        self.window = 24             # P2-b: 直近 N 件のみで解く（0=無制限）。cv.json で上書き
+        self.gate_cfg = {}           # cv.json 由来の品質ゲート設定（P1・欠損は既定）
+        self.out_result = out_result
+        self.thresh_m = thresh_m
+        self.hb = hb
+        self.s = None                # いまのセッション（_WatchSession）
+
+    def step(self):
+        self._follow_latest_session()
+        self._reload_config()
+        todo = self._new_keyframes()
+        names = self._localize_new(todo)
+        # 処理済み枚数（画像が欠けて読めなかった分も数える。二度と処理されないので、待ち続けないように）。
+        # ハートビートへ渡すのは**解き直しの後**（_report）。ハートビートは別スレッドが 2 秒ごとに書くので、
+        # ここで渡すと「処理済み」が先に Quest へ届き、結果がまだ無いのに「処理し終えた」と判定される。
+        self.s.done_n += len(todo)
+        solved_now = self._maybe_solve()
+        self._report(write_now=bool(names) or solved_now)
+
+    def _follow_latest_session(self):
+        """最新の session_* へ移る（初回・Quest の RESET で新しいセッションができたとき）。"""
+        subs = sorted(d for d in self.base.glob("session_*") if d.is_dir())
+        act = subs[-1] if subs else self.base   # 最新セッション、無ければ base 自身（後方互換）
+        if self.s is not None and act == self.s.path:
+            return
+        out_path = Path(self.out_result) if self.out_result else (act / "result_sim3.json")
+        self.s = _WatchSession(act, out_path, self.loc.hloc / "watch_work" / act.name)
+        # 新セッションへ即ハートビートを書く（前のセッションの進み具合は持ち越さない）
+        self.hb.reset_session(act)
+        self.hb.update(busy=False, busy_n=0, window=0, total_ok=0, done=0)
+        self.hb.write_now()
+        prune_work_dirs(self.loc.hloc / "watch_work", keep=8)
+        log.info("セッション追従: %s （結果→ %s）",
+                 act.name if act != self.base else "(base)", out_path)
+
+    def _reload_config(self):
+        """cv.json をライブ反映する（GUI/run.py の変更が即効く）。"""
+        cj = self.s.path / "cv.json"
+        if not cj.exists():
+            return
+        try:
+            mt = cj.stat().st_mtime
+            if mt == self.s.cv_mtime:
+                return
+            self.s.cv_mtime = mt
+            cfg = json.loads(cj.read_text())
+            self.gate_cfg = cfg                      # 品質ゲートしきい値もライブ反映
+            ne, nm = int(cfg.get("every", self.every)), int(cfg.get("min", self.min_kf))
+            nwin = int(cfg.get("window", self.window))
+            ns = cfg.get("scene")
+            if ns and ns != self.loc.scene_str:      # scene 変更 → DB 再ロード＆蓄積リセット
+                log.info("scene 変更 → 再ロード: %s", ns)
+                self.loc.load_scene(ns)
+                self.hb.set_scene(self.loc.scene_str)
+                self.s.clear()
+            if (ne, nm, nwin) != (self.every, self.min_kf, self.window):
+                log.info("設定更新(cv.json): every %d→%d, min %d→%d, window %d→%d",
+                         self.every, ne, self.min_kf, nm, self.window, nwin)
+            self.every, self.min_kf, self.window = ne, nm, nwin
+        except Exception:
+            pass
+
+    def _new_keyframes(self):
+        """まだ処理していないキーフレーム（META の json と、処理済み判定の鍵）。
+
+        **処理済み判定はファイル名 + 更新時刻**で行う。
+        キーフレーム名は試行ごとに req_000001 から振り直されるため、万一同じセッション
+        フォルダが再利用されるとファイルが上書きされる。名前だけで判定していると
+        「既に処理した」と誤認して新しい試行のデータを一枚も読まなくなる（実機で発生）。
+        """
+        todo = []
+        for m in sorted(self.s.path.glob("req_*.json")):
+            try:
+                key = (m.name, m.stat().st_mtime_ns)
+            except OSError:
+                continue
+            if key not in self.s.processed:
+                todo.append((m, key))
+        return todo
+
+    def _localize_new(self, todo):
+        """新着キーフレームをローカライズし、品質ゲートを通ったものを解法バッファに積む。処理した画像名を返す。"""
+        s = self.s
+        names, intr, world, meta_of = [], {}, {}, {}
+        for m, key in todo:
+            s.processed.add(key)
+            try:
+                nm, intr_nm, center, meta = read_keyframe(m)
+            except (OSError, ValueError):
+                continue
+            names.append(nm)
+            intr[nm], world[nm], meta_of[nm] = intr_nm, center, meta
+        if not names:
+            return names
+
+        # 処理に入る直前に「busy」を立ててすぐ書く。hloc は数秒〜数分ブロックするが、
+        # その間もハートビートのスレッドが busy=True のまま書き続ける。
+        # busy は解き直しが終わって処理済み枚数を更新するまで下ろさない（_report）。
+        self.hb.update(busy=True, busy_n=len(names))
+        self.hb.write_now()
+        est = self.loc.localize(s.path, names, intr, s.work)
+        ok, rej = 0, 0
+        for nm in names:
+            rec = est.get(nm)
+            acc, why = (False, "ローカライズ失敗") if rec is None else \
+                gates.should_accept_kf(rec["num_inliers"], self.gate_cfg)
+            # **各キーフレームの結果を残す**。これが無いと、あとから
+            # 「最初の t 秒分だけで解いたらどうなるか」を再現できず、
+            # 収集時間と精度の関係（評価の主結果）が引けない。hloc の再実行は高価。
+            append_kf_result(s.path, nm, meta_of.get(nm, {}), rec, acc, why, world.get(nm))
+            if rec is None:
+                log.info("KF棄却: %s ローカライズ失敗", nm)
+                rej += 1
+                continue
+            if not acc:               # P1-a: 低インライア KF は蓄積しない
+                log.info("KF棄却: %s %s", nm, why)
+                rej += 1
+                continue
+            s.Cc.append(rec["center"]); s.Cw.append(world[nm]); s.total_ok += 1; ok += 1
+            if self.window > 0 and len(s.Cc) > self.window:   # P2-b: 古い KF を捨てて直近 N 件に保つ
+                del s.Cc[0]; del s.Cw[0]
+        log.info("[%s] 新着 %d 枚（採用 %d 棄却 %d）／累計 %d 窓 %d",
+                 s.path.name, len(names), ok, rej, s.total_ok, len(s.Cc))
+        return names
+
+    def _maybe_solve(self):
+        """採用が min_kf 枚以上あり、前回の解き直しから every 枚増えていれば Sim(3) を解き直す。解いたら True。"""
+        s = self.s
+        if not (len(s.Cc) >= self.min_kf and (s.total_ok - s.last_solved) >= self.every):
+            return False
+        s.last_solved = s.total_ok
+        hand = self.gate_cfg.get("handedness", -1)
+        res = solve_alignment(s.Cc, s.Cw, thresh_m=self.thresh_m,
+                              handedness=(None if hand in (0, None) else int(hand)))
+        nin = int(res["inliers"].sum())
+        pub, why = gates.should_publish(       # P1-a: 解の公開ゲート
+            res["sigma"], nin, len(s.Cc), res["rmse_m"],
+            self.gate_cfg, cond=res["cond"])
+        # 採否と統計を記録し、ハートビート経由で Quest まで届ける
+        s.last_solve = {
+            "solve_n": len(s.Cc), "solve_inliers": nin,
+            "solve_ratio": round(nin / max(1, len(s.Cc)), 3),
+            "solve_rmse": round(float(res["rmse_m"]), 4),
+            "solve_sigma": round(float(res["sigma"]), 4),
+            "solve_baseline": round(res["cond"]["baseline"], 2),
+            "solve_extent2": round(res["cond"]["extent2"], 2),
+            "solve_published": bool(pub),
+            "solve_why": why,
+        }
+        # **終盤のキーフレームだけ残差が跳ね上がっていないか。**
+        # Quest のワールド原点が収集の途中で動くと、そこから先のキーフレームは
+        # 別座標系になる。RANSAC が古い側を採るので rmse も インライア率も
+        # 悪化せず、数値だけ見ていると気づけない。実機で 24 枚中の最後の 4 枚が
+        # 0.4→0.8→1.9→2.8 m と伸びる形で発生した（試行内で原点が飛んだ）。
+        tail = tail_residual_m(res, s.Cc, s.Cw)
+        if tail is not None and tail > 0.20:
+            log.error("終盤のキーフレーム残差が %.2f m あります。収集中に Quest の"
+                      " トラッキング原点が動いた可能性が高く、この試行は使えません"
+                      "（analysis/check_tracking.py で確認できます）。", tail)
+
+        if pub:
+            write_result_json(res, s.out_path, len(s.Cc))
+            log.info("Sim(3) 更新 → %s（%s / run.py が Quest へ返送）", s.out_path, why)
+        else:
+            log.warning("Sim(3) 非公開（ゲート不合格）: %s "
+                        "[n=%d inliers=%d rmse=%.4f scale=%+.3f 間隔=%.2f 広がり=%.2f]",
+                        why, len(s.Cc), nin, res["rmse_m"], res["sigma"],
+                        res["cond"]["baseline"], res["cond"]["extent2"])
+        return True
+
+    def _report(self, write_now):
+        """進み具合をハートビートへ（結果ファイルを書いた後なので、Quest が done を見た時点で
+        解き直しも済んでいる）。直近の解の採否理由も載せる — これが無いと「なぜロックしないか」が
+        WSL2 のターミナルにしか出ず、実機側からは原因が分からない。"""
+        s = self.s
+        self.hb.update(busy=False, busy_n=0, window=len(s.Cc), total_ok=s.total_ok, done=s.done_n,
+                       **s.last_solve)
+        if write_now:
+            self.hb.write_now()       # 採否・処理済みを即座に反映（定期書き込みを待たない）
 
 
 def tail_residual_m(res, Cc, Cw, tail_n=4):
@@ -562,7 +610,6 @@ def append_kf_result(session_dir, name, meta, rec, accepted, why, center_world):
     t を変えて繰り返せるので、**1 回の歩行データから曲線全体をオフラインで再構成できる**。
     hloc の再実行（GPU で数分）を避けられるのが大きい。
     """
-    import json as _json
     try:
         row = {
             "name": name,
@@ -577,7 +624,7 @@ def append_kf_result(session_dir, name, meta, rec, accepted, why, center_world):
         if rec is not None:
             row["center_colmap"] = [float(v) for v in rec["center"]]
         with open(Path(session_dir) / "kf_localized.jsonl", "a", encoding="utf-8") as f:
-            f.write(_json.dumps(row, ensure_ascii=False) + "\n")
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
     except Exception:
         pass          # 記録は補助。失敗しても本体は止めない
 
@@ -602,7 +649,6 @@ def solve_alignment(centers_colmap, centers_world, thresh_m=0.10, handedness=-1)
 
 def write_result_json(res, path, n):
     """解いた Sim(3) を result_sim3.json に書き出す（run.py が検知して Quest へ返送）。"""
-    import json
     q, t = res["quat"], res["t"]
     Path(path).write_text(json.dumps(dict(
         sigma=float(res["sigma"]),

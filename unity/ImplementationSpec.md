@@ -654,6 +654,8 @@ python -m tests.test_setup_windows     # セットアップの判断: ディス�
 
 `test_liveness.py` と `test_events.py` は **C# のソースを読んで定数名・鍵名の一致を機械的に検査する**。プロトコルを変えたときに片側だけ直す事故を防ぐため。
 
+**`localize.watch` を書き換えたときの回帰確認**（WSL2）: 保存済みのセッション（`received/session_*`）を数枚ずつ新しいセッションへ流し込み、`kf_localized.jsonl`・`result_sim3.json`・解き直しのログ（scale・インライア・採否）が書き換え前と一致するかを比べる。GPU で同じ入力なら結果は決定的（同じ 30 枚を 2 回流して完全に一致）。2026-10 の整理（`_Watcher` への分割）はこの方法で、公開されるセッション（`irt_short2`）とゲートで非公開になるセッション（`bld2`）の両方で一致を確認した。
+
 ### 12.2 hloc/pycolmap・WSL を使う部分
 
 **WSL2 実機でしか確認できない。** `hloc_db` の構築 → 自己ローカライズ（DB 画像を自分自身に照合）→ 実キーフレームからの Sim(3) で検証する（自己テストで誤差/シーン対角 ~1e-4、実キーフレームで残差 ~1cm を確認済み）。CV 環境は `python -m vptserver.cv.check_env` で確かめる。
