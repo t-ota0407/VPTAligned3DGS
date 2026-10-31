@@ -55,11 +55,7 @@ public class UDPManager : MonoBehaviour
 
     private const string PrefKeyIP   = "VPTAlign_ServerIP";
     private static readonly byte[] BeaconMagic = Encoding.ASCII.GetBytes("VPTSRV1");
-    private const byte TYPE_RESULT = 3;
-    private const byte TYPE_RESET  = 4;
-    private const byte TYPE_PING   = 5;
-    private const byte TYPE_PONG   = 6;
-    private const byte TYPE_EVENT  = 7;
+    // パケットの形式と type 定数は VpPacket（PC 側 protocol.py と一致させる）
 
     // 試行リセットの通し番号。ヘッダの reqId に載せ、PC 側は同じ番号の重複を無視する
     // （UDP はベストエフォートなので同じ RESET を数回送る。重複でセッションが複数切られるのを防ぐ）。
@@ -255,15 +251,7 @@ public class UDPManager : MonoBehaviour
         uint seq = ++_pingSeq;
         _pingSentTicks[seq & 15] = DateTime.UtcNow.Ticks;
 
-        byte[] payload = Encoding.UTF8.GetBytes("{}");
-        byte[] pkt = new byte[13 + payload.Length];
-        pkt[0] = (byte)'V'; pkt[1] = (byte)'P'; pkt[2] = TYPE_PING;
-        pkt[3] = (byte)(seq & 0xFF); pkt[4] = (byte)((seq >> 8) & 0xFF);
-        pkt[5] = (byte)((seq >> 16) & 0xFF); pkt[6] = (byte)((seq >> 24) & 0xFF);
-        pkt[7] = 0; pkt[8] = 0; pkt[9] = 1; pkt[10] = 0;
-        pkt[11] = (byte)(payload.Length & 0xFF); pkt[12] = (byte)((payload.Length >> 8) & 0xFF);
-        Array.Copy(payload, 0, pkt, 13, payload.Length);
-        SendRaw(pkt);
+        SendRaw(VpPacket.Build(VpPacket.TYPE_PING, seq, Encoding.UTF8.GetBytes("{}")));
     }
 
     /// <summary>受信スレッドが置いた PONG をメインスレッドで解析する。</summary>
@@ -312,13 +300,7 @@ public class UDPManager : MonoBehaviour
             Debug.LogError($"[UDPManager] 実験イベントが大きすぎます（{payload.Length}B）: 送信しません");
             return;
         }
-        byte[] pkt = new byte[13 + payload.Length];
-        pkt[0] = (byte)'V'; pkt[1] = (byte)'P'; pkt[2] = TYPE_EVENT;
-        pkt[3] = (byte)(seq & 0xFF); pkt[4] = (byte)((seq >> 8) & 0xFF);
-        pkt[5] = (byte)((seq >> 16) & 0xFF); pkt[6] = (byte)((seq >> 24) & 0xFF);
-        pkt[7] = 0; pkt[8] = 0; pkt[9] = 1; pkt[10] = 0;
-        pkt[11] = (byte)(payload.Length & 0xFF); pkt[12] = (byte)((payload.Length >> 8) & 0xFF);
-        Array.Copy(payload, 0, pkt, 13, payload.Length);
+        byte[] pkt = VpPacket.Build(VpPacket.TYPE_EVENT, seq, payload);
 
         _outbox.Add(new PendingEvent { seq = seq, pkt = pkt, lastSentT = Time.unscaledTime });
         SendRaw(pkt);                       // 初回はすぐ送る
@@ -377,14 +359,7 @@ public class UDPManager : MonoBehaviour
         if (_endPoint == null) { WarnNoTargetOnce(); return; }
 
         uint id = ++_resetId;
-        byte[] payload = Encoding.UTF8.GetBytes(infoJson ?? "{}");
-        byte[] pkt = new byte[13 + payload.Length];
-        pkt[0] = (byte)'V'; pkt[1] = (byte)'P'; pkt[2] = TYPE_RESET;
-        pkt[3] = (byte)(id & 0xFF); pkt[4] = (byte)((id >> 8) & 0xFF);
-        pkt[5] = (byte)((id >> 16) & 0xFF); pkt[6] = (byte)((id >> 24) & 0xFF);
-        pkt[7] = 0; pkt[8] = 0; pkt[9] = 1; pkt[10] = 0;
-        pkt[11] = (byte)(payload.Length & 0xFF); pkt[12] = (byte)((payload.Length >> 8) & 0xFF);
-        Array.Copy(payload, 0, pkt, 13, payload.Length);
+        byte[] pkt = VpPacket.Build(VpPacket.TYPE_RESET, id, Encoding.UTF8.GetBytes(infoJson ?? "{}"));
 
         for (int i = 0; i < Mathf.Max(1, repeat); i++) SendRaw(pkt);
         Debug.Log($"[UDPManager] RESET 送信 id={id} {infoJson}");
@@ -575,22 +550,18 @@ public class UDPManager : MonoBehaviour
                 {
                     var remote = new IPEndPoint(IPAddress.Any, 0);
                     byte[] buf = rx.Receive(ref remote);
-                    // 13B ヘッダ: 'V','P', type, reqId(4), idx(2), total(2), len(2)
-                    if (buf.Length < 13 || buf[0] != (byte)'V' || buf[1] != (byte)'P') continue;
+                    if (!VpPacket.TryParse(buf, out byte type, out int len)) continue;
 
-                    int len = buf[11] | (buf[12] << 8);
-                    if (buf.Length < 13 + len) continue;
-
-                    if (buf[2] == TYPE_RESULT)
+                    if (type == VpPacket.TYPE_RESULT)
                     {
-                        _resultJson = Encoding.UTF8.GetString(buf, 13, len);      // メインスレッドが解析
+                        _resultJson = Encoding.UTF8.GetString(buf, VpPacket.HeaderSize, len);   // メインスレッドが解析
                     }
-                    else if (buf[2] == TYPE_PONG)
+                    else if (type == VpPacket.TYPE_PONG)
                     {
                         // 受信時刻はこのスレッドで確定させる（メインスレッドまで待つと RTT が
                         // 1 フレーム分＝十数 ms 膨らむ）。long は volatile 不可なので Interlocked。
                         System.Threading.Interlocked.Exchange(ref _lastPongTicks, DateTime.UtcNow.Ticks);
-                        _pongJson = Encoding.UTF8.GetString(buf, 13, len);
+                        _pongJson = Encoding.UTF8.GetString(buf, VpPacket.HeaderSize, len);
                     }
                 }
                 catch (SocketException) { /* receive timeout: ループ継続（停止チェック） */ }

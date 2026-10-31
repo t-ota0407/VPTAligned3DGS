@@ -1,4 +1,4 @@
-"""UDP パケットの定義と解析（Quest 側 KeyframeUploader.cs と一致させること）。
+"""UDP パケットの定義と解析（Quest 側 VpPacket.cs と一致させること。type 定数は tests/test_liveness.py が突き合わせる）。
 
 パケット: 13B ヘッダ + ペイロード
   [ 'V','P', type(1), reqId(4 LE), idx(2 LE), total(2 LE), len(2 LE) ] + payload[len]
@@ -45,7 +45,7 @@ TYPE_EVENT = 7
 
 
 def build(type_, payload, req=0, idx=0, total=1):
-    """13B ヘッダ + payload のパケットを組み立てる（送信用。Quest 側 KeyframeUploader と同形式）。"""
+    """13B ヘッダ + payload のパケットを組み立てる（送信用。Quest 側 VpPacket.Build と同形式）。"""
     import struct
     return (MAGIC + bytes([type_]) + struct.pack("<I", req) + struct.pack("<H", idx) +
             struct.pack("<H", total) + struct.pack("<H", len(payload)) + payload)

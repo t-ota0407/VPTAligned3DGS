@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Globalization;
 using System.Linq;
 using UnityEngine;
@@ -316,7 +315,7 @@ public class ControlPointMeasure : MonoBehaviour
             // 実機で区別できない（編集モードの StartEdit は同じ理由で既に Reject を出している）。
             _rejectReason = block;
             _lastRejectT = Time.realtimeSinceStartup;
-            StartCoroutine(RejectHaptic());
+            Haptics.RejectRight(this);
             Debug.LogWarning("[ControlPointMeasure] 測量を開始できません: " + block);
             return;
         }
@@ -377,26 +376,22 @@ public class ControlPointMeasure : MonoBehaviour
     /// <summary>コントローラ先端のワールド位置（校正済みオフセットを適用）。</summary>
     private bool TryGetTip(out Vector3 tip)
     {
-        tip = Vector3.zero;
+        if (ControllerTipCalibration.TryGetTipWorld(tipCalib, rightControllerAnchor, allowUncalibrated,
+                                                    out tip, out string why))
+            return true;
         if (rightControllerAnchor == null) { Debug.LogWarning("[ControlPointMeasure] 右コントローラ未検出"); return false; }
 
-        bool calibrated = tipCalib != null && tipCalib.IsCalibrated;
-        if (!calibrated && !allowUncalibrated)
+        // 未校正
+        _rejectReason = why;
+        _lastRejectT = Time.realtimeSinceStartup;
+        Haptics.RejectRight(this);
+        if (!_warnedUncalibrated)
         {
-            _rejectReason = "Controller tip is not calibrated";
-            _lastRejectT = Time.realtimeSinceStartup;
-            StartCoroutine(RejectHaptic());
-            if (!_warnedUncalibrated)
-            {
-                _warnedUncalibrated = true;
-                Debug.LogError("[ControlPointMeasure] 先端が未校正です。追跡原点と物理的先端の差（数cm）が"
-                               + "そのまま誤差に乗るため測量を中止します。先に先端校正を行ってください。");
-            }
-            return false;
+            _warnedUncalibrated = true;
+            Debug.LogError("[ControlPointMeasure] 先端が未校正です。追跡原点と物理的先端の差（数cm）が"
+                           + "そのまま誤差に乗るため測量を中止します。先に先端校正を行ってください。");
         }
-        Vector3 offset = tipCalib != null ? tipCalib.TipOffsetM : Vector3.zero;
-        tip = rightControllerAnchor.TransformPoint(offset);
-        return true;
+        return false;
     }
 
     /// <summary>移動量チェックの下限[m]。model 側の情報からどれだけ小さい値が出ても、しきい値を
@@ -440,7 +435,7 @@ public class ControlPointMeasure : MonoBehaviour
         _rejectReason = $"Tip has not moved ({moved * 100f:F0} cm since the last point). " +
                         "Walk to this point and touch it.";
         _lastRejectT = Time.realtimeSinceStartup;
-        StartCoroutine(RejectHaptic());
+        Haptics.RejectRight(this);
         Debug.LogWarning($"[ControlPointMeasure] {_markers[_idx].name}: 前の点から {moved * 100f:F1} cm " +
                          $"しか動いていません（必要 {need * 100f:F0} cm）。同じ場所で連打していませんか。");
         return false;
@@ -511,7 +506,7 @@ public class ControlPointMeasure : MonoBehaviour
         _rejectReason = "";
 
         var m = _markers[_idx];
-        StartCoroutine(Haptic());
+        Haptics.Tick(this);
         CpGizmos.Draw(() =>
             // ラベルに `?` を付ける。確定済みの橙の点と**文字でも**区別できないと、
             // 色の印象がパススルーの背景で変わったときに「もう記録した」と読み違える。
@@ -530,7 +525,7 @@ public class ControlPointMeasure : MonoBehaviour
             // 押して無反応にしない。何をすれば進むのかをそのまま返す。
             _rejectReason = "Nothing to confirm — touch the point and pull the right trigger first";
             _lastRejectT = Time.realtimeSinceStartup;
-            StartCoroutine(RejectHaptic());
+            Haptics.RejectRight(this);
             return;
         }
         Record(_pendingTip);
@@ -543,7 +538,7 @@ public class ControlPointMeasure : MonoBehaviour
         int i = _idx;
         _hasPending = false; _pendingRetries = 0;
         CpGizmos.Draw(() => _previewLayer.Clear(i));
-        StartCoroutine(RejectHaptic());
+        Haptics.RejectRight(this);
         Debug.Log("[ControlPointMeasure] 仮置きを取り消しました → " + CurrentName + " を置き直してください");
     }
 
@@ -579,7 +574,7 @@ public class ControlPointMeasure : MonoBehaviour
                   + (err >= 0f ? $"（現在の見かけ誤差 {err * 100f:F1}cm）" : ""));
 
         _hasPrevTip = true; _prevTip = tip; _prevMarkerIdx = _idx; _rejectReason = "";
-        StartCoroutine(Haptic());
+        Haptics.Tick(this);
 
         // **状態遷移を先に済ませ、描画は後ろに置く。** 逆順にすると描画の失敗が測量を止める
         // （実機で実際に止まった → <see cref="CpGizmos.Draw"/> の解説）。
@@ -636,7 +631,7 @@ public class ControlPointMeasure : MonoBehaviour
             if (_got[i]) continue;
             _rejectReason = $"{CpGizmos.RealLabel(_markers[i].name)} is not set yet — cannot finish";
             _lastRejectT = Time.realtimeSinceStartup;
-            StartCoroutine(RejectHaptic());
+            Haptics.RejectRight(this);
             Debug.LogWarning("[ControlPointMeasure] 未測の点（" + _markers[i].name + "）が残っています。完了にしません。");
             return;
         }
@@ -689,26 +684,6 @@ public class ControlPointMeasure : MonoBehaviour
     }
 
     private void OnDestroy() => _gizmos?.DestroyAll();
-
-    private IEnumerator Haptic()
-    {
-        OVRInput.SetControllerVibration(0.3f, 0.6f, OVRInput.Controller.RTouch);
-        yield return new WaitForSeconds(0.06f);
-        OVRInput.SetControllerVibration(0f, 0f, OVRInput.Controller.RTouch);
-    }
-
-    /// <summary>受け付けられなかったことを触覚で返す（長め・弱め＝拒否の合図）。
-    /// 画面を見ていなくても「記録されていない」と分かるようにする。</summary>
-    private IEnumerator RejectHaptic()
-    {
-        for (int i = 0; i < 2; i++)
-        {
-            OVRInput.SetControllerVibration(0.1f, 0.25f, OVRInput.Controller.RTouch);
-            yield return new WaitForSeconds(0.09f);
-            OVRInput.SetControllerVibration(0f, 0f, OVRInput.Controller.RTouch);
-            yield return new WaitForSeconds(0.06f);
-        }
-    }
 
     private static string F(float v, int digits) => v.ToString("F" + digits, Inv);
 }

@@ -118,6 +118,23 @@ public class ControllerTipCalibration : MonoBehaviour
         state == TipState.Calibrated || state == TipState.Manual ||
         (state == TipState.Restored && !requireCalibrationEachSession);
 
+    /// <summary>コントローラ先端のワールド位置（CP の測量・編集が使う）。
+    /// コントローラが無い・未校正（allowUncalibrated でなければ）なら false と理由（HUD 用・英語）を返す。
+    /// calib が無ければオフセット 0（追跡原点そのもの）。</summary>
+    public static bool TryGetTipWorld(ControllerTipCalibration calib, Transform controller, bool allowUncalibrated,
+                                      out Vector3 tip, out string why)
+    {
+        tip = Vector3.zero; why = "";
+        if (controller == null) { why = "Right controller not detected"; return false; }
+        if (!allowUncalibrated && !(calib != null && calib.IsCalibrated))
+        {
+            why = "Controller tip is not calibrated";
+            return false;
+        }
+        tip = controller.TransformPoint(calib != null ? calib.TipOffsetM : Vector3.zero);
+        return true;
+    }
+
     /// <summary>前回セッションの値が残っているが、まだこのセッションで校正していない状態。
     /// HUD はこれを「✗」ではなく「▲ 前回値」として区別して見せる。</summary>
     public bool HasStaleCalibration => state == TipState.Restored && requireCalibrationEachSession;

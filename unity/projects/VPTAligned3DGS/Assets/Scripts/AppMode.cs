@@ -37,22 +37,16 @@ public static class AppMode
     /// どちらかを離すと 0 に戻る。発火は 1 回だけ（離して押し直すまで再発火しない）。</summary>
     public class SticksHold
     {
-        private float _t0 = -1f;
-        private bool  _fired;
+        private readonly PressTracker _press = new PressTracker();
 
         /// <summary>いま押し続けている割合 0..1（押していなければ 0）。HUD の表示用。</summary>
-        public float Progress(float holdS) =>
-            _t0 < 0f || holdS <= 0f ? 0f : Mathf.Clamp01((Time.unscaledTime - _t0) / holdS);
+        public float Progress(float holdS) => _press.Progress(holdS);
 
         /// <summary>毎フレーム呼ぶ。holdS 秒押し続けた瞬間だけ true。</summary>
         public bool Update(float holdS)
         {
-            bool both = OVRInput.Get(OVRInput.RawButton.LThumbstick) && OVRInput.Get(OVRInput.RawButton.RThumbstick);
-            if (!both) { _t0 = -1f; _fired = false; return false; }
-            if (_t0 < 0f) _t0 = Time.unscaledTime;
-            if (_fired || Time.unscaledTime - _t0 < holdS) return false;
-            _fired = true;
-            return true;
+            _press.Update(OVRInput.Get(OVRInput.RawButton.LThumbstick) && OVRInput.Get(OVRInput.RawButton.RThumbstick));
+            return _press.LongPress(holdS);
         }
     }
 }

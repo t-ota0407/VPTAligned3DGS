@@ -12,7 +12,7 @@ using UnityEngine.Rendering;                // AsyncGPUReadback（修正5）
 /// UDP で LAN 内 PC に送る。重い CV（特徴抽出・マッチ・PnP・相似変換）は PC 側で行う想定。
 ///
 /// 送信トリガ: 左グリップ（押し込みエッジ）または public CaptureAndSend()。
-/// パケット: 13B ヘッダ [ 'V','P', type, reqId(4), idx(2), total(2), len(2) ] + ペイロード。
+/// パケット: 13B ヘッダ＋ペイロード（→ [[VpPacket]]）。
 ///   type=1: META（UTF-8 JSON: 解像度・K・姿勢・時刻・チャンク数・JPEGバイト数）
 ///   type=2: IMG チャンク（JPEG の分割）
 /// 信頼性は当面ベストエフォート（欠損時は再キャプチャ）。NACK 再送は後続(§5.4)。
@@ -228,31 +228,16 @@ public class KeyframeUploader : MonoBehaviour
           .Append(",\"ts\":\"").Append(ts.ToString("O")).Append("\"")
           .Append(",\"n\":").Append(total).Append(",\"len\":").Append(jpg.Length).Append("}");
         byte[] meta = Encoding.UTF8.GetBytes(sb.ToString());
-        udp.SendRaw(Packet(1, req, 0, (ushort)1, meta, meta.Length));
+        udp.SendRaw(VpPacket.Build(VpPacket.TYPE_META, req, meta));
 
         // ---- IMG チャンク ----
         for (int i = 0; i < total; i++)
         {
             int off = i * chunkPayload;
             int len = Mathf.Min(chunkPayload, jpg.Length - off);
-            byte[] payload = new byte[len];
-            Array.Copy(jpg, off, payload, 0, len);
-            udp.SendRaw(Packet(2, req, (ushort)i, (ushort)total, payload, len));
+            udp.SendRaw(VpPacket.Build(VpPacket.TYPE_IMG, req, jpg, off, len, (ushort)i, (ushort)total));
             if ((i & 7) == 7) yield return null; // 数チャンクごとに1フレーム空けて取りこぼし低減
         }
         Debug.Log($"[KeyframeUploader] sent req={req} img={w}x{h} jpg={jpg.Length}B chunks={total}");
-    }
-
-    // 13B ヘッダ + ペイロード
-    private static byte[] Packet(byte type, uint reqId, ushort idx, ushort total, byte[] payload, int len)
-    {
-        byte[] p = new byte[13 + len];
-        p[0] = (byte)'V'; p[1] = (byte)'P'; p[2] = type;
-        p[3] = (byte)(reqId & 0xFF); p[4] = (byte)((reqId >> 8) & 0xFF); p[5] = (byte)((reqId >> 16) & 0xFF); p[6] = (byte)((reqId >> 24) & 0xFF);
-        p[7] = (byte)(idx & 0xFF); p[8] = (byte)((idx >> 8) & 0xFF);
-        p[9] = (byte)(total & 0xFF); p[10] = (byte)((total >> 8) & 0xFF);
-        p[11] = (byte)(len & 0xFF); p[12] = (byte)((len >> 8) & 0xFF);
-        Array.Copy(payload, 0, p, 13, len);
-        return p;
     }
 }

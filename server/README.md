@@ -224,7 +224,7 @@ python -m tests.test_cv_launcher       # CV の自動起動（wsl.exe の出力�
 python -m tests.test_setup_windows     # セットアップの判断（ディストリの選び方・DB の状態・ファイアウォール）
 ```
 
-`test_liveness.py` と `test_events.py` は **C# のソースを読んで定数名・鍵名の一致を機械的に検査する**。プロトコルを変えたときに片側だけ直す事故を防ぐため。hloc/pycolmap を使う部分と、WSL・ファイアウォールを実際に操作する部分（`cv_launcher` の起動・終了、`setup_windows` / `setup_wsl.sh`）は実機でしか確認できない。WSL 側の環境は `python -m vptserver.cv.check_env` で確かめられる。
+`test_liveness.py` と `test_events.py` は **C# のソースを読んで定数名・鍵名の一致を機械的に検査する**（パケットの type 定数とヘッダ長は `VpPacket.cs`、PONG の鍵名は `UDPManager.cs`）。プロトコルを変えたときに片側だけ直す事故を防ぐため。hloc/pycolmap を使う部分と、WSL・ファイアウォールを実際に操作する部分（`cv_launcher` の起動・終了、`setup_windows` / `setup_wsl.sh`）は実機でしか確認できない。WSL 側の環境は `python -m vptserver.cv.check_env` で確かめられる。
 
 ---
 
@@ -261,7 +261,7 @@ server/
    ├─ events.py              実験イベント（type=7）の保存・model 側 CP の JSON への組み直し
    ├─ state.py               GUI とコンソールが読む共有状態
    ├─ scenes.py              DB ができているシーンの判定と DB の設定名（Windows 側と WSL2 側の両方が使う）
-   ├─ protocol.py            パケット定義と parse()
+   ├─ protocol.py            パケット定義と parse()（Quest 側は VpPacket.cs）
    ├─ reassembler.py         reqId ごとにチャンクを集約 → Keyframe
    ├─ udp_receiver.py        UDP 受信ループ（timeout で Ctrl-C 対応）
    ├─ keyframe.py            Keyframe（K / 姿勢 / 画像）データクラスと K_for_image()

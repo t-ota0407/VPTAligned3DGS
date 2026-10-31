@@ -187,10 +187,8 @@ public class DemoController : MonoBehaviour
     private int   _alignAttempt;
     private Coroutine _alignCo;
 
-    private struct Btn { public bool down, tainted, longFired, tapped; public float t0; }
-    private Btn _a, _b, _y;
-    private float _comboT = -1f;
-    private bool  _comboFired;
+    private PressTracker _a, _b, _y;                       // tapMaxS が決まる Awake で作る
+    private readonly PressTracker _combo = new PressTracker();   // Y＋B 同時押し
 
     // ================= 公開状態（HUD 用） =================
 
@@ -283,8 +281,7 @@ public class DemoController : MonoBehaviour
     /// <summary>スタッフパネルを開くための Y＋B 長押しの進み具合 0..1（押していなければ 0）。
     /// 3 秒は反応が無いと「効いているのか」分からない長さなので、HUD が押している間だけ出す。</summary>
     public float StaffComboProgress =>
-        _staff || _comboT < 0f || _comboFired || staffComboHoldS <= 0f
-            ? 0f : Mathf.Clamp01((Time.unscaledTime - _comboT) / staffComboHoldS);
+        _staff || _combo.LongFired ? 0f : _combo.Progress(staffComboHoldS);
 
     /// <summary>来場者向けの補足（英語）。</summary>
     public string VisitorHintSub
@@ -383,6 +380,9 @@ public class DemoController : MonoBehaviour
 
     private void Awake()
     {
+        _a = new PressTracker(tapMaxS);
+        _b = new PressTracker(tapMaxS);
+        _y = new PressTracker(tapMaxS);
         if (align    == null) align    = FindFirstObjectByType<AlignmentManager>();
         if (anchors  == null) anchors  = FindFirstObjectByType<AnchorPersistence>();
         if (uploader == null) uploader = FindFirstObjectByType<KeyframeUploader>();
@@ -550,24 +550,21 @@ public class DemoController : MonoBehaviour
 
     private void HandleInput()
     {
-        float now = Time.unscaledTime;
-        Track(ref _a, OVRInput.Get(OVRInput.RawButton.A), now);
-        Track(ref _b, OVRInput.Get(OVRInput.RawButton.B), now);
-        Track(ref _y, OVRInput.Get(OVRInput.RawButton.Y), now);
+        _a.Update(OVRInput.Get(OVRInput.RawButton.A));
+        _b.Update(OVRInput.Get(OVRInput.RawButton.B));
+        _y.Update(OVRInput.Get(OVRInput.RawButton.Y));
 
         // Y＋B 同時長押し: スタッフパネルの開閉
-        if (_y.down && _b.down)
+        _combo.Update(_y.Down && _b.Down);
+        if (_combo.Down)
         {
-            _y.tainted = _b.tainted = true;   // この押下は短押しとして扱わない
-            if (_comboT < 0f) { _comboT = now; _comboFired = false; }
-            if (!_comboFired && now - _comboT >= staffComboHoldS)
+            _y.Taint(); _b.Taint();   // この押下は短押しとして扱わない
+            if (_combo.LongPress(staffComboHoldS))
             {
-                _comboFired = true;
                 if (_state == DemoState.Manual) RejectPulse();   // 手動調整を開いたまま閉じない（先に Y か A で終える）
                 else SetStaffMode(!_staff);
             }
         }
-        else _comboT = -1f;
 
         if (!_staff) return;   // 来場者の間は A/B/Y に何も割り当てない（X は AlignmentManager が受ける）
 
@@ -580,34 +577,22 @@ public class DemoController : MonoBehaviour
         if (_state == DemoState.Manual)
         {
             // A（Lock して保存）は AlignmentManager が受ける。ここは Y（取り消し）だけ
-            if (_y.tapped) ToggleManual();
+            if (_y.Tapped) ToggleManual();
             return;
         }
 
-        if (_a.down && !_a.tainted && !_a.longFired && now - _a.t0 >= clearHoldS)
+        if (_a.LongPress(clearHoldS))
         {
-            _a.longFired = true;
             if (CanClearSaved) ClearSavedAlignment(); else RejectPulse();
         }
-        if (_a.tapped)
+        if (_a.Tapped)
         {
             if (CanCancelAlign) CancelAlign();
             else if (CanRealign) Realign();
             else RejectPulse();
         }
-        if (_b.tapped) { if (CanShowAnyway) ShowAnyway(); else RejectPulse(); }
-        if (_y.tapped) { if (CanManual) ToggleManual(); else RejectPulse(); }
-    }
-
-    private void Track(ref Btn s, bool pressed, float now)
-    {
-        s.tapped = false;
-        if (pressed && !s.down) { s.down = true; s.t0 = now; s.tainted = false; s.longFired = false; }
-        else if (!pressed && s.down)
-        {
-            s.down = false;
-            s.tapped = !s.tainted && !s.longFired && now - s.t0 <= tapMaxS;
-        }
+        if (_b.Tapped) { if (CanShowAnyway) ShowAnyway(); else RejectPulse(); }
+        if (_y.Tapped) { if (CanManual) ToggleManual(); else RejectPulse(); }
     }
 
     // ================= スタッフ操作（HUD のボタンからも呼ぶ） =================
@@ -996,16 +981,6 @@ public class DemoController : MonoBehaviour
 
     // ================= 触覚 =================
 
-    private void Pulse(float amp) => StartCoroutine(PulseRoutine(amp, 0.08f));
-    private void RejectPulse() => StartCoroutine(PulseRoutine(1f, 0.25f));
-
-    private IEnumerator PulseRoutine(float amp, float seconds)
-    {
-        OVRInput.SetControllerVibration(0.5f, amp, OVRInput.Controller.LTouch);
-        OVRInput.SetControllerVibration(0.5f, amp, OVRInput.Controller.RTouch);
-        float t0 = Time.realtimeSinceStartup;
-        while (Time.realtimeSinceStartup - t0 < seconds) yield return null;
-        OVRInput.SetControllerVibration(0f, 0f, OVRInput.Controller.LTouch);
-        OVRInput.SetControllerVibration(0f, 0f, OVRInput.Controller.RTouch);
-    }
+    private void Pulse(float amp) => Haptics.PulseBoth(this, amp);
+    private void RejectPulse() => Haptics.RejectBoth(this);
 }

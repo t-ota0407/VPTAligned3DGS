@@ -25,6 +25,7 @@ from vptserver import liveness  # noqa: E402
 
 CS_UDP = (Path(__file__).resolve().parents[2] /
           "unity/projects/VPTAligned3DGS/Assets/Scripts/UDPManager.cs")
+CS_PKT = CS_UDP.with_name("VpPacket.cs")   # パケット形式と type 定数
 
 
 def write_hb(path, d, age=0.0):
@@ -174,13 +175,17 @@ def test_protocol_constants():
     """C# 側の type 定数が Python と一致するか（ここがずれると無言で無視される）。"""
     print("== プロトコル type 定数の一致 ==")
     from vptserver import protocol as P
-    src = CS_UDP.read_text(encoding="utf-8")
-    for name, want in [("TYPE_RESULT", P.TYPE_RESULT), ("TYPE_RESET", P.TYPE_RESET),
+    src = CS_PKT.read_text(encoding="utf-8")
+    for name, want in [("TYPE_META", P.TYPE_META), ("TYPE_IMG", P.TYPE_IMG),
+                       ("TYPE_RESULT", P.TYPE_RESULT), ("TYPE_RESET", P.TYPE_RESET),
                        ("TYPE_PING", P.TYPE_PING), ("TYPE_PONG", P.TYPE_PONG),
                        ("TYPE_EVENT", P.TYPE_EVENT)]:
         m = re.search(rf"const\s+byte\s+{name}\s*=\s*(\d+)", src)
         got = int(m.group(1)) if m else None
         check(got == want, f"{name}: C#={got} Python={want}")
+    m = re.search(r"HeaderSize\s*=\s*(\d+)", src)
+    check(m is not None and int(m.group(1)) == P.HEADER_SIZE,
+          f"ヘッダ長: C#={m.group(1) if m else None} Python={P.HEADER_SIZE}")
 
 
 if __name__ == "__main__":

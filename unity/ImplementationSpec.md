@@ -77,6 +77,7 @@ unity/projects/VPTAligned3DGS/Assets/
 ├─ DemoScene.unity                         デモ展示用シーン（同じ APK。実験の最初の画面から切替。§14）
 ├─ Scripts/
 │  ├─ UDPManager             送信・ビーコン自動検出・結果受信・PING/PONG・イベント再送
+│  ├─ VpPacket               パケット（13B ヘッダ）の組み立てと読み取り・type 定数（PC 側 protocol.py と一致）
 │  ├─ KeyframeUploader       キーフレーム送信（左グリップ 短押し単発 / 長押し自動）
 │  ├─ PassthroughCameraSource PCA ラップ（解像度・K 診断）
 │  ├─ AlignmentManager       姿勢の真実。手動操作・Sim(3) 受理・補間適用・Lock・アンカー追従の受け口
@@ -84,7 +85,8 @@ unity/projects/VPTAligned3DGS/Assets/
 │  ├─ AnchorMath             永続化の純粋計算（相対姿勢・多数決・アンカー配置。§7）
 │  ├─ AppMode                実験 ⇄ デモのシーン切替・両スティック長押しの判定（§14.1）
 │  ├─ TrackingOriginWatcher  トラッキング原点の移動検出（実験とデモで共用。§8）
-│  ├─ GaussianSplatController 表示・不透明度・ModelId
+│  ├─ GaussianSplatController 表示・不透明度・ModelId・モデルの境界ボックス
+│  ├─ PressTracker / Haptics 物理ボタンの短押し・長押しの判定 / 振動の合図（実験・デモで共用）
 │  ├─ AlignmentHud           ヘッドセット内 HUD（実験 / 簡易 / デモ）
 │  ├─ Demo/DemoController    デモ展示モードの進行（§14）
 │  └─ Experiment/            評価実験一式（§9）
@@ -652,7 +654,7 @@ python -m tests.test_cv_launcher       # CV の自動起動: wsl.exe の出力�
 python -m tests.test_setup_windows     # セットアップの判断: ディストリの選び方・DB の状態・ファイアウォール
 ```
 
-`test_liveness.py` と `test_events.py` は **C# のソースを読んで定数名・鍵名の一致を機械的に検査する**。プロトコルを変えたときに片側だけ直す事故を防ぐため。
+`test_liveness.py` と `test_events.py` は **C# のソースを読んで定数名・鍵名の一致を機械的に検査する**（type 定数とヘッダ長は `VpPacket.cs`、PONG の鍵名は `UDPManager.cs`）。プロトコルを変えたときに片側だけ直す事故を防ぐため。
 
 **`localize.watch` を書き換えたときの回帰確認**（WSL2）: 保存済みのセッション（`received/session_*`）を数枚ずつ新しいセッションへ流し込み、`kf_localized.jsonl`・`result_sim3.json`・解き直しのログ（scale・インライア・採否）が書き換え前と一致するかを比べる。GPU で同じ入力なら結果は決定的（同じ 30 枚を 2 回流して完全に一致）。2026-10 の整理（`_Watcher` への分割）はこの方法で、公開されるセッション（`irt_short2`）とゲートで非公開になるセッション（`bld2`）の両方で一致を確認した。
 

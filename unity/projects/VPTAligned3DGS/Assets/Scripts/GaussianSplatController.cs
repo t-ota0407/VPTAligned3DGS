@@ -26,6 +26,21 @@ public class GaussianSplatController : MonoBehaviour
     private const string GlobalOpacityProp = "_GaussianSplatGlobalOpacity";
 
     public GaussianSplatRenderer Renderer => splatRenderer;
+
+    // 境界ボックスが取れないとき（アセット未割当）の代わり。部屋 1 つぶんの大きさ
+    private static readonly Vector3 FallbackBoundsMin = new Vector3(-5f, -2f, -5f);
+    private static readonly Vector3 FallbackBoundsMax = new Vector3(5f, 2f, 5f);
+
+    /// <summary>3DGS アセットの境界ボックス（モデル座標）。取れなければ（ctrl が無い・アセット未割当）
+    /// 部屋 1 つぶんの代わりの箱を入れて false を返す。
+    /// 2 つの姿勢の「見た目の差」（境界ボックス 8 隅の移動量）を測るのに使う（AlignmentManager・AnchorPersistence）。</summary>
+    public static bool GetModelBounds(GaussianSplatController ctrl, out Vector3 mn, out Vector3 mx)
+    {
+        var asset = ctrl != null && ctrl.splatRenderer != null ? ctrl.splatRenderer.asset : null;
+        if (asset != null) { mn = asset.boundsMin; mx = asset.boundsMax; return true; }
+        mn = FallbackBoundsMin; mx = FallbackBoundsMax;
+        return false;
+    }
     public Transform SplatRoot => gaussianSplatsObject != null ? gaussianSplatsObject.transform : null;
 
     /// <summary>永続化の識別子（P4）。明示指定があればそれ、無ければ 3DGS アセット名、それも無ければ "default"。</summary>

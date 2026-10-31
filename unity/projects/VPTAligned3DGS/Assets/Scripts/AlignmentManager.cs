@@ -312,17 +312,12 @@ public class AlignmentManager : MonoBehaviour
     private float SceneShiftM(float s1, Quaternion r1, Vector3 p1,
                               float s2, Quaternion r2, Vector3 p2)
     {
-        Vector3 mn = new Vector3(-5f, -2f, -5f), mx = new Vector3(5f, 2f, 5f);   // 取得失敗時の代替
-        var rend  = splatController != null ? splatController.Renderer : null;
-        var asset = rend != null ? rend.asset : null;
-        if (asset != null) { mn = asset.boundsMin; mx = asset.boundsMax; }
+        GaussianSplatController.GetModelBounds(splatController, out Vector3 mn, out Vector3 mx);
 
         float worst = 0f;
         for (int i = 0; i < 8; i++)
         {
-            Vector3 c = new Vector3((i & 1) == 0 ? mn.x : mx.x,
-                                    (i & 2) == 0 ? mn.y : mx.y,
-                                    (i & 4) == 0 ? mn.z : mx.z);
+            Vector3 c = AnchorMath.Corner(i, mn, mx);
             Vector3 a = p1 + r1 * (s1 * c);
             Vector3 b = p2 + r2 * (s2 * c);
             float d = Vector3.Distance(a, b);
@@ -575,19 +570,14 @@ public class AlignmentManager : MonoBehaviour
         splatRoot.rotation = Quaternion.Euler(0f, yaw, 0f);
 
         // 2) 床スナップ: アセット bounds の8隅をワールド変換し最下 Y を求めて floorY に合わせる
-        var rend = splatController != null ? splatController.Renderer : null;
-        var asset = rend != null ? rend.asset : null;
-        if (asset == null) { Debug.LogWarning("[AlignmentManager] AutoLevel: GaussianSplatAsset 取得不可。水平化のみ実施。"); return; }
+        if (!GaussianSplatController.GetModelBounds(splatController, out Vector3 mn, out Vector3 mx))
+        { Debug.LogWarning("[AlignmentManager] AutoLevel: GaussianSplatAsset 取得不可。水平化のみ実施。"); return; }
 
-        Vector3 mn = asset.boundsMin, mx = asset.boundsMax;
         Matrix4x4 l2w = splatRoot.localToWorldMatrix;
         float minY = float.MaxValue;
         for (int i = 0; i < 8; i++)
         {
-            Vector3 c = new Vector3((i & 1) == 0 ? mn.x : mx.x,
-                                    (i & 2) == 0 ? mn.y : mx.y,
-                                    (i & 4) == 0 ? mn.z : mx.z);
-            float wy = l2w.MultiplyPoint3x4(c).y;
+            float wy = l2w.MultiplyPoint3x4(AnchorMath.Corner(i, mn, mx)).y;
             if (wy < minY) minY = wy;
         }
         float delta = floorY - minY;

@@ -305,7 +305,7 @@ public class AnchorPersistence : MonoBehaviour
         TrackedCount = _cands.Count;
         if (TrackedCount == 0) return;
 
-        GetBounds(out Vector3 mn, out Vector3 mx);
+        GaussianSplatController.GetModelBounds(splatController, out Vector3 mn, out Vector3 mx);
         AnchorMath.LargestAgreeingSet(_cands, _savedScale, mn, mx, anchorAgreeM, _agree);
         AgreeingCount = _agree.Count;
         Pose pose = AnchorMath.Average(_cands, _agree);
@@ -738,14 +738,6 @@ public class AnchorPersistence : MonoBehaviour
     }
 
     // ================= helpers =================
-
-    private void GetBounds(out Vector3 mn, out Vector3 mx)
-    {
-        mn = new Vector3(-5f, -2f, -5f); mx = new Vector3(5f, 2f, 5f);   // 取得失敗時の代替（AlignmentManager と同じ）
-        var rend = splatController != null ? splatController.Renderer : null;
-        var asset = rend != null ? rend.asset : null;
-        if (asset != null) { mn = asset.boundsMin; mx = asset.boundsMax; }
-    }
 
     private bool TryGetFingerprint(out string hash, out int count)
     {

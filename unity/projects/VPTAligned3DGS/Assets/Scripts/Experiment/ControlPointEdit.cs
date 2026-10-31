@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Collections.Generic;
 using System.Globalization;
 using UnityEngine;
@@ -250,7 +249,7 @@ public class ControlPointEdit : MonoBehaviour
         measure.ExternalGizmoHold = true;              // 測量中でなくても球を出し続けてもらう
         if (align != null) align.SetSplatVisible(true); // 起動直後は非表示なのでここで出す
         Repaint();
-        StartCoroutine(Haptic());                       // A 長押しで入ったときの合図
+        Haptics.Tick(this);                       // A 長押しで入ったときの合図
         ExperimentLogger.LogStatic("cp_model_edit",
             "\"action\":\"start\",\"points\":" + _markers.Length +
             ",\"aligned\":" + (PoseApplied ? "true" : "false"));
@@ -285,7 +284,7 @@ public class ControlPointEdit : MonoBehaviour
             measure.RepaintSurveyColors();             // 借りていた色を測量側の意味に戻す
         }
         _ghost?.ClearAll();
-        StartCoroutine(Haptic());
+        Haptics.Tick(this);
 
         if (_edited.Count == 0)
         {
@@ -320,7 +319,7 @@ public class ControlPointEdit : MonoBehaviour
 
         m.transform.localPosition = local;
 
-        StartCoroutine(Haptic());
+        Haptics.Tick(this);
         int placed = _idx;
         CpGizmos.Draw(() =>
         {
@@ -366,7 +365,7 @@ public class ControlPointEdit : MonoBehaviour
                 _ghost?.Clear(i);
         });
         Repaint();                      // 白 → 黄（いま触る点）へ戻す
-        StartCoroutine(RejectHaptic());
+        Haptics.RejectRight(this);
         Debug.Log("[ControlPointEdit] 仮置きを取り消しました → " + CurrentName + " を置き直してください");
     }
 
@@ -394,7 +393,7 @@ public class ControlPointEdit : MonoBehaviour
         Debug.Log($"[ControlPointEdit] {m.name} を確定 local={local}"
                   + $"（ビルド値から {Vector3.Distance(local, orig) * 100f:F1} cm）");
 
-        StartCoroutine(Haptic());
+        Haptics.Tick(this);
 
         // **状態遷移を先に済ませ、描画は後ろに置く。** 逆順だった間、実機ではゴーストの
         // マテリアル生成が例外を投げてここへ到達せず、置き直しても次の点へ進まなかった
@@ -408,7 +407,7 @@ public class ControlPointEdit : MonoBehaviour
         if (_idx <= 0) { Reject("Already at the first point"); return; }
         _idx--;
         Repaint();
-        StartCoroutine(Haptic());
+        Haptics.Tick(this);
     }
 
     private void Advance()
@@ -425,7 +424,7 @@ public class ControlPointEdit : MonoBehaviour
         if (!_running) return;
         if (AtLastPoint) { Reject("Last point — press Y to finish editing"); return; }
         Advance();
-        StartCoroutine(Haptic());
+        Haptics.Tick(this);
     }
 
     /// <summary>現在の点をビルド値へ戻す。仮置き中なら、まずその仮置きを取り消す
@@ -437,7 +436,7 @@ public class ControlPointEdit : MonoBehaviour
         if (!CurrentIsEdited) { Reject($"{CurrentLabel} has not been moved — nothing to revert"); return; }
         Revert(_markers[_idx].name);
         Repaint();
-        StartCoroutine(Haptic());
+        Haptics.Tick(this);
     }
 
     /// <summary>この起動で動かした点をすべてビルド値へ戻す。</summary>
@@ -448,7 +447,7 @@ public class ControlPointEdit : MonoBehaviour
         if (_edited.Count == 0) { Reject("Nothing to revert"); return; }
         foreach (var name in new List<string>(_edited)) Revert(name);
         Repaint();
-        StartCoroutine(Haptic());
+        Haptics.Tick(this);
     }
 
     private void Revert(string name)
@@ -523,16 +522,11 @@ public class ControlPointEdit : MonoBehaviour
     /// <summary>コントローラ先端のワールド位置（校正済みオフセットを適用）。</summary>
     private bool TryGetTip(out Vector3 tip)
     {
-        tip = Vector3.zero;
-        if (rightControllerAnchor == null) { Reject("Right controller not detected"); return false; }
-        if (!allowUncalibrated && !(tipCalib != null && tipCalib.IsCalibrated))
-        {
-            Reject("Controller tip is not calibrated");
-            return false;
-        }
-        Vector3 offset = tipCalib != null ? tipCalib.TipOffsetM : Vector3.zero;
-        tip = rightControllerAnchor.TransformPoint(offset);
-        return true;
+        if (ControllerTipCalibration.TryGetTipWorld(tipCalib, rightControllerAnchor, allowUncalibrated,
+                                                    out tip, out string why))
+            return true;
+        Reject(why);
+        return false;
     }
 
     /// <summary>編集したら測量を無効化する（PC 側の local はスナップショットなので食い違う）。
@@ -590,25 +584,7 @@ public class ControlPointEdit : MonoBehaviour
     {
         _lastError = why;
         _lastErrorT = Time.realtimeSinceStartup;
-        StartCoroutine(RejectHaptic());
-    }
-
-    private IEnumerator Haptic()
-    {
-        OVRInput.SetControllerVibration(0.3f, 0.6f, OVRInput.Controller.RTouch);
-        yield return new WaitForSeconds(0.06f);
-        OVRInput.SetControllerVibration(0f, 0f, OVRInput.Controller.RTouch);
-    }
-
-    private IEnumerator RejectHaptic()
-    {
-        for (int i = 0; i < 2; i++)
-        {
-            OVRInput.SetControllerVibration(0.1f, 0.25f, OVRInput.Controller.RTouch);
-            yield return new WaitForSeconds(0.09f);
-            OVRInput.SetControllerVibration(0f, 0f, OVRInput.Controller.RTouch);
-            yield return new WaitForSeconds(0.06f);
-        }
+        Haptics.RejectRight(this);
     }
 
     private static string F(float v) => v.ToString("F5", Inv);

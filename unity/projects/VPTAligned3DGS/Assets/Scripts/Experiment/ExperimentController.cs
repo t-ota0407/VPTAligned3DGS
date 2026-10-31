@@ -92,11 +92,9 @@ public class ExperimentController : MonoBehaviour
 
     private readonly AppMode.SticksHold _demoHold = new AppMode.SticksHold();
 
-    // A / B の短押し／長押し判定。押し始めの時刻と、長押しを既に発火したか。
-    private float _aDownT = -1f;
-    private bool  _aLongFired;
-    private float _bDownT = -1f;
-    private bool  _bLongFired;
+    // A / B の短押し／長押し判定（長押しは aLongPressS。短押しに時間の上限は無い）
+    private readonly PressTracker _a = new PressTracker();
+    private readonly PressTracker _b = new PressTracker();
 
     // ---- 試行の状態 ----
     private TrialState _state = TrialState.Idle;
@@ -400,7 +398,9 @@ public class ExperimentController : MonoBehaviour
     /// experimentInputEnabled の間は AlignmentManager 側の同ボタンが封じられているので二重発火しない。</summary>
     private void HandleExperimentInput()
     {
-        if (!experimentInputEnabled) return;
+        _a.Update(OVRInput.Get(OVRInput.Button.One));
+        _b.Update(OVRInput.Get(OVRInput.Button.Two));
+        if (!experimentInputEnabled) { _a.Taint(); _b.Taint(); return; }
 
         // 測量中・編集中は右トリガーが記録／配置に使われている。試行操作と混ぜない。
         bool surveying = cpMeasure != null && cpMeasure.IsRunning;
@@ -432,28 +432,17 @@ public class ExperimentController : MonoBehaviour
     {
         if (!editing)
         {
-            _bDownT = -1f; _bLongFired = false;
-            if (OVRInput.GetDown(OVRInput.Button.Two) && _state != TrialState.Running && !surveying)
+            // 押した瞬間に発火（長押し判定で遅らせない）。この押下は編集の短押し・長押しに持ち越さない
+            if (_b.Pressed && _state != TrialState.Running && !surveying)
                 StartTrial();                                    // B(右): 開始／次へ
+            _b.Taint();
             return;
         }
         if (cpEdit == null) return;
 
-        if (OVRInput.GetDown(OVRInput.Button.Two)) { _bDownT = Time.realtimeSinceStartup; _bLongFired = false; }
-
         // 長押しは離す前に発火（A と同じ理由: 押し続ける長さが分からないと不安になる）
-        if (!_bLongFired && _bDownT >= 0f && OVRInput.Get(OVRInput.Button.Two)
-            && Time.realtimeSinceStartup - _bDownT >= aLongPressS)
-        {
-            _bLongFired = true;
-            cpEdit.RevertAll();
-        }
-        if (OVRInput.GetUp(OVRInput.Button.Two))
-        {
-            bool wasLong = _bLongFired;
-            _bDownT = -1f; _bLongFired = false;
-            if (!wasLong) cpEdit.RevertCurrent();
-        }
+        if (_b.LongPress(aLongPressS)) cpEdit.RevertAll();
+        if (_b.Tapped) cpEdit.RevertCurrent();
     }
 
     /// <summary>A(右) の短押し／長押し。
@@ -473,24 +462,17 @@ public class ExperimentController : MonoBehaviour
     /// 中断は Y に一本化する（元々 Y でも中断でき、HUD もそう出す）。</summary>
     private void HandleAButton(bool surveying, bool editing)
     {
-        if (_state == TrialState.Running) { _aDownT = -1f; return; }
-
-        if (OVRInput.GetDown(OVRInput.Button.One)) { _aDownT = Time.realtimeSinceStartup; _aLongFired = false; }
+        if (_state == TrialState.Running) { _a.Taint(); return; }   // 試行中の A は何もしない
 
         // 長押しは「離す前」に発火させる。押している間ずっと反応が無いと、
         // どれだけ押せばよいのか分からない（触覚が出た時点で指を離せる）。
-        if (!_aLongFired && _aDownT >= 0f && OVRInput.Get(OVRInput.Button.One)
-            && Time.realtimeSinceStartup - _aDownT >= aLongPressS)
+        if (_a.LongPress(aLongPressS))
         {
-            _aLongFired = true;
             if (cpEdit != null && !surveying) cpEdit.ToggleEdit();
         }
 
-        if (OVRInput.GetUp(OVRInput.Button.One))
+        if (_a.Tapped)
         {
-            bool wasLong = _aLongFired;
-            _aDownT = -1f; _aLongFired = false;
-            if (wasLong) return;
             if (editing)                 cpEdit.AcceptCurrent();   // 仮置きを確定／無ければ次へ
             else if (surveying)          cpMeasure.ConfirmPoint(); // 仮置きを確定して次の点へ
             else if (cpMeasure != null)  cpMeasure.ToggleSurvey(); // 測量の開始
