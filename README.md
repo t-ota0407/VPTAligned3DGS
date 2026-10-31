@@ -23,7 +23,9 @@ The headset's camera images are relocalized against the **COLMAP reconstruction 
 │  └─ projects/VPTAligned3DGS/       Unity project
 │     └─ Assets/Scripts/             Alignment, UDP transport, experiment control
 ├─ server/                          PC side (receiver + CV relocalization)
-│  ├─ run.py                         Windows: UDP receive, Sim(3) reply, GUI
+│  ├─ setup_windows.bat              One-time PC setup (double-click): Python, WSL2, CV env, firewall
+│  ├─ start_experiment.bat / start_demo.bat   Start the server (and the WSL2 CV worker)
+│  ├─ run.py                         Windows: UDP receive, Sim(3) reply, GUI, starts the CV worker
 │  ├─ vptserver/cv/                  WSL2: hloc relocalization, Sim(3) estimation, quality gates
 │  ├─ analysis/                      Evaluation / aggregation scripts
 │  └─ tests/                         Pure-computation and protocol-consistency tests
@@ -68,7 +70,7 @@ Only code and documentation are versioned here. The following must be supplied s
 |---|---|---|
 | **3DGS model** (`.ply` and converted assets) | Hundreds of MB to several GB | Supply your own `.ply`, convert it with `Tools > Gaussian Splats > Create GaussianSplatAsset` in the Unity Editor, place it under `Assets/3DGSModel/` and assign it to the `GaussianSplatRenderer` in `GSTestScene` |
 | **COLMAP scene** (`server/scene_data/`) | 1–7 GB per scene | Drop in the COLMAP reconstruction used to train the 3DGS (`sparse/0` + `images/`) |
-| **hloc** (`server/Hierarchical-Localization/`) | Separate repository | `cd server && git clone --recursive https://github.com/cvg/Hierarchical-Localization` |
+| **hloc** and the CV Python environment (WSL2) | Separate repository, several GB | Installed by `server\setup_windows.bat` (hloc pinned to commit `c13273b`, cloned to `~/hloc` inside WSL2) |
 | **Experiment capture data** (`server/received/`) | Generated at runtime | `run.py` creates `session_<timestamp>/` on every launch |
 | **Final IK / avatar** | Paid Unity Asset Store assets, redistribution not permitted | Not required for alignment itself. If needed, purchase separately and place under `Assets/Plugins/RootMotion/` |
 
@@ -89,16 +91,19 @@ The only permission required is `horizonos.permission.HEADSET_CAMERA` (already d
 
 ### 4.2 PC
 
-**The heavy CV runs under WSL2 (Ubuntu) + CUDA**, because pycolmap crashes on native Windows when `reconstruction.rigs` is accessed. UDP reception, the Sim(3) reply and the GUI stay on the Windows side in `run.py`; the two halves are loosely coupled through the shared `/mnt/c` filesystem.
+**The heavy CV runs under WSL2 (Ubuntu) + CUDA**, because pycolmap crashes on native Windows when `reconstruction.rigs` is accessed. UDP reception, the Sim(3) reply and the GUI stay on the Windows side in `run.py`; the two halves are loosely coupled through the shared `/mnt/c` filesystem. `run.py` starts and stops the WSL2 worker itself, so day-to-day use needs no Linux terminal.
 
-```bash
-# Windows
-pip install -r server/requirements.txt
+Requirements: Windows 10/11 on the same LAN as the Quest; an **NVIDIA GPU is strongly recommended** (CPU works but takes minutes per alignment).
 
-# WSL2 (CUDA)
-pip install -r server/requirements-cv.txt
-cd server && git clone --recursive https://github.com/cvg/Hierarchical-Localization
-```
+**Double-click `server\setup_windows.bat`** and answer its questions. It is safe to run again, and the first run takes 10–30 minutes. It will:
+
+1. find (or offer to install) Python and create `server\.venv`;
+2. find or install **Ubuntu-24.04 under WSL2** (a first-time WSL install may need a reboot and asks you to create a Linux user);
+3. build the CV environment there with **pinned, tested versions** (torch 2.6.0+cu124, hloc `c13273b`, LightGlue `eb42fee`, `server/constraints-cv.txt`) and pre-download the model weights, so the PC also works offline at a venue;
+4. allow inbound UDP 50000 in the Windows firewall — including on networks Windows classifies as *Public*, if you agree (the default firewall prompt leaves those blocked);
+5. offer to build the relocalization database for each scene in `server/scene_data/`.
+
+Details, manual steps and troubleshooting: [`server/README.md`](server/README.md).
 
 Ports: 50000 data (Quest→PC) / 50001 discovery beacon (PC→LAN broadcast) / 50002 results (PC→Quest).
 If the access point blocks broadcast traffic, set the PC's IP in `UDPManager.manualIPAddress` on the Quest side.
@@ -107,18 +112,15 @@ If the access point blocks broadcast traffic, set the PC's IP in `UDPManager.man
 
 ## 5. Running
 
-```bash
-# 0) Once per scene (WSL2/GPU): build the relocalization database
-python -m vptserver.cv.hloc_db --scene scene_data/<name>
+| Purpose | Double-click (in `server\`) | Data folder |
+|---|---|---|
+| Build the database for a newly added scene (once per scene) | `build_scene_db.bat` | `scene_data/<name>/hloc/` |
+| Evaluation experiment | `start_experiment.bat` | `received/` |
+| Demo exhibition | `start_demo.bat` | `received_demo/` |
 
-# 1) Windows: receive, reply and GUI (creates received/session_<timestamp>/ and cv.json per launch)
-python run.py
+`start_*.bat` launches `run.py` (receive, reply, GUI; one `session_<timestamp>/` per launch), which in turn starts the CV worker in WSL2 and stops it when the window is closed. Arguments are passed through, e.g. `start_demo.bat --scene scene_data/<name>` when there are several scenes.
 
-# 2) WSL2: follow the newest session, update the Sim(3) every N keyframes
-python -m vptserver.cv.localize
-```
-
-Then launch the app on the Quest and **walk around the room** while sending keyframes with the left grip. Once independently solved Sim(3) estimates agree consecutively, the alignment locks and is persisted to spatial anchors.
+Then launch the app on the Quest and **walk around the room** while sending keyframes with the left grip. Once independently solved Sim(3) estimates agree consecutively, the alignment locks. In the demo mode (hold both thumbsticks for 3 s on the first screen) the alignment is also saved to spatial anchors and restored after a restart.
 
 ---
 

@@ -23,6 +23,9 @@ using UnityEngine;
 ///   3. 頭部姿勢の不連続 … 上 2 つが鳴らない「静かな」再ローカライズを拾う。
 ///      頭は瞬間移動しないので、**速度**が人体の限界を超えたら座標系が動いたと判断できる。
 ///      フレーム落ち（dt が伸びる）で誤検出しないよう、距離ではなく速度で見る。
+///
+/// 実験（ExperimentController: 試行の破棄・測量の無効化）とデモ（DemoController: 収集のやり直し・
+/// 表示中の再確認）の両方が使うので、Experiment/ ではなく Scripts/ 直下に置く。
 /// </summary>
 public class TrackingOriginWatcher : MonoBehaviour
 {

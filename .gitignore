@@ -55,6 +55,10 @@ __pycache__/
 /server/scene_data/
 # 実験の受信データ（キーフレーム画像・イベントログ）
 /server/received/
+# デモ展示の受信データ（start_demo.bat は received_demo へ保存する）
+/server/received_demo/
+# この PC 用の起動設定（WSL のディストリ名・CV の venv。setup_windows.bat / run.py が書く）
+/server/launch_config.json
 # 解析スクリプトの出力
 /server/analysis_out/
 

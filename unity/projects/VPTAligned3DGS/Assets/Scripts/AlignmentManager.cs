@@ -68,14 +68,21 @@ public class AlignmentManager : MonoBehaviour
     [SerializeField] private float floorY = 0f;
 
     [Header("Auto-align gates (P1-b)")]
-    [Tooltip("採用に許す world 残差 RMSE 上限[m]（PC 側 max_rmse と揃える）。")]
-    [SerializeField] private float maxRmseM = 0.05f;
-    [Tooltip("採用に必要なインライア率 inliers/n。")]
-    [SerializeField] private float minInlierRatio = 0.5f;
-    [Tooltip("|scale| の妥当域（本シーン既知値 ≈0.96）。")]
-    [SerializeField] private float minScaleAbs = 0.5f;
-    [SerializeField] private float maxScaleAbs = 2.0f;
-    [Tooltip("改悪防止: 適用済みの解がある場合、rmse がこの倍率×前回採用rmse を超えたら棄却。")]
+    // 品質のしきい値（残差・インライア率・スケール妥当域）は **PC 側 cv.json が単一の真実**。
+    // ここに同じものを複製しない。
+    //
+    // 以前は Quest 側にも maxRmseM=0.05 / minInlierRatio=0.5 / |scale|∈[0.5,2.0] を持っていたが、
+    // いずれも PC 側（0.08 / 0.40 / 健全性のみ）より厳しく、PC が承認した解を Quest が黙って
+    // 握り潰していた。しかも Quest 側はシーンにシリアライズされるため、再ビルドしないと直せない。
+    // 実際 bld2 で 2 系統とも踏んだ:
+    //   - |scale| 4.52（このシーンの COLMAP 単位）が [0.5,2.0] 外で全棄却
+    //   - rmse 0.0506 / 0.0519 が 0.05 をわずかに超えて棄却（PC 側 0.08 は通していた）
+    // Quest が担うのは「PC が出せない判断」だけにする:
+    //   (1) 下の健全性チェック（NaN/Inf/0 スケールなど、壊れた値を触らせない）
+    //   (2) 改悪防止（PC は無状態なので「前回より悪くなった」を知らない）
+    //   (3) 連続一致による確定（正しさの判定本体）
+    [Tooltip("改悪防止: 適用済みの解がある場合、rmse がこの倍率×前回採用rmse を超えたら棄却。\n" +
+             "PC 側は毎回無状態で解き直すため、「良い状態を保持する」判断は Quest 側にしか出せない。")]
     [SerializeField] private float rmseWorsenFactor = 1.5f;
 
     [Header("Auto-align confirmation（連続一致で確定）")]
@@ -175,6 +182,31 @@ public class AlignmentManager : MonoBehaviour
     /// <summary>これまでに 1 度でも自動 Sim(3) を採用したか（HUD / 実験制御用）。</summary>
     public bool HasAcceptedSim3 => _hasAcceptedSim3;
 
+    // ---- 空間アンカー追従（永続化・デモ。→ Specification.md §15.5） ----
+    // 姿勢が「保存済みアンカーから再構成したもの」かどうか。true の間だけ AnchorPersistence の
+    // 追従が姿勢を書き換えられる。手動操作・Sim(3)・リセットなど**他の経路で姿勢を変えたら false**
+    // に落とし、次の保存が終わるまで追従させない。落とさないと、古いアンカーから再構成した姿勢が
+    // 新しく合わせた姿勢を毎フレーム上書きしてしまう。
+    private bool _anchored;
+
+    /// <summary>姿勢がアンカー追従の管理下にあるか（Locked かつアンカー由来）。</summary>
+    public bool IsAnchored => _anchored && state == AlignState.Locked;
+
+    /// <summary>保存済みアンカーから姿勢を復元したときだけ発火する。
+    /// <see cref="OnLocked"/> は鳴らさない（鳴らすと保存が走り、いま復元したアンカーを作り直してしまう）。
+    /// <see cref="OnAutoAligned"/> も鳴らさない（実験の「自動位置合わせが収束した瞬間」の定義を守る）。</summary>
+    public System.Action OnRestored;
+
+    /// <summary>PC から届いた Sim(3) を受け付けるか（既定 true）。
+    /// デモは確定した時点で false にする（来場者の目の前でシーンが跳ねるのを避ける。Specification.md §15.7）。
+    /// 実験はこれに触らない（制限時間まで集め続け、届いた解はすべて評価する）。</summary>
+    public bool AcceptAutoResults { get; set; } = true;
+
+    /// <summary>B（初期姿勢へ戻す）を受け付けるか（既定 true）。
+    /// デモは false にする: 初期姿勢は Editor 上の置き場所で展示では意味が無く、スタッフパネルの
+    /// Y＋B 長押しを手動調整中に試すと、押した瞬間に調整中の姿勢が飛んでしまうため。</summary>
+    public bool ResetButtonEnabled { get; set; } = true;
+
     private void Awake()
     {
         if (splatRoot == null)
@@ -218,13 +250,23 @@ public class AlignmentManager : MonoBehaviour
     public void OnSim3Received(Sim3Result r)
     {
         if (splatRoot == null) { Debug.LogWarning("[AlignmentManager] OnSim3Received: splatRoot 未設定"); return; }
+        if (!AcceptAutoResults)
+        {
+            Debug.Log($"[AlignmentManager] Sim(3) を無視（受付停止中。デモの確定後など） scale={r.sigma:F3} rmse={r.rmse:F4}");
+            return;
+        }
 
         float ratio = r.n > 0 ? r.inliers / (float)r.n : 0f;
         float absScale = Mathf.Abs(r.sigma);
 
-        if (r.inliers < 3 || ratio < minInlierRatio)          { RejectSim3($"inliers={r.inliers}/{r.n} ratio={ratio:F2}(<{minInlierRatio})"); return; }
-        if (r.rmse > maxRmseM)                                { RejectSim3($"rmse={r.rmse:F4}m(>{maxRmseM}m)"); return; }
-        if (absScale < minScaleAbs || absScale > maxScaleAbs) { RejectSim3($"|scale|={absScale:F3}(範囲外[{minScaleAbs},{maxScaleAbs}])"); return; }
+        // 健全性チェックのみ（品質のしきい値は PC 側 cv.json が持つ。上の Header コメント参照）。
+        // ここで見るのは「Transform に入れたら壊れる値か」だけで、シーン固有の量は一切見ない。
+        // 特に |scale| に妥当域を置かないこと — COLMAP の 1 unit が何 m かは再構成ごとに違い、
+        // 妥当域を置くと別シーンで正しい解が丸ごと落ちる（bld2 で全 16 セッション棄却）。
+        bool finite = !float.IsNaN(r.sigma)  && !float.IsInfinity(r.sigma)
+                   && !float.IsNaN(r.rmse)   && !float.IsInfinity(r.rmse);
+        if (!finite || absScale <= 0f) { RejectSim3($"異常な解 scale={r.sigma} rmse={r.rmse}"); return; }
+        if (r.inliers < 3)             { RejectSim3($"inliers={r.inliers}/{r.n}(<3)"); return; }
         // 改悪防止: 既に良い解を持っているなら、明確に悪化した解では上書きしない
         if (_hasAcceptedSim3 && r.rmse > _lastAcceptedRmse * rmseWorsenFactor)
         { RejectSim3($"改悪 rmse={r.rmse:F4}>{_lastAcceptedRmse:F4}×{rmseWorsenFactor}"); return; }
@@ -241,7 +283,7 @@ public class AlignmentManager : MonoBehaviour
         bool confirmed = _agreementCount >= RequiredAgreements;
 
         LastAutoReason = confirmed
-            ? $"確定 inliers={r.inliers}/{r.n} rmse={r.rmse:F4} scale={r.sigma:F3}"
+            ? $"確定 inliers={r.inliers}/{r.n}({ratio:F2}) rmse={r.rmse:F4} scale={r.sigma:F3}"
             : $"収束中 一致{_agreementCount}/{RequiredAgreements} " +
               (LastSceneShiftM >= 0f ? $"ずれ{LastSceneShiftM * 100f:F0}cm " : "") +
               $"scale={r.sigma:F3}";
@@ -319,6 +361,7 @@ public class AlignmentManager : MonoBehaviour
         _agreementCount   = 0;
         _autoConfirmed    = false;
         LastSceneShiftM   = -1f;
+        _anchored         = false;
         state = AlignState.Adjusting;
         if (splatRoot != null)
         {
@@ -346,6 +389,7 @@ public class AlignmentManager : MonoBehaviour
     {
         if (splatRoot == null) { Debug.LogWarning("[AlignmentManager] ApplySim3: splatRoot 未設定"); return; }
         if (_smoothCo != null) { StopCoroutine(_smoothCo); _smoothCo = null; }
+        _anchored = false;   // 新しい解が入った。保存し直すまでアンカー追従に上書きさせない
 
         float dPos = Vector3.Distance(splatRoot.position, pos);
         float dDeg = Quaternion.Angle(splatRoot.rotation, rot);
@@ -362,6 +406,38 @@ public class AlignmentManager : MonoBehaviour
         splatRoot.position   = pos;
         splatRoot.rotation   = rot;
         splatRoot.localScale = new Vector3(sigma, sigma, sigma);   // 負値=鏡像（aras-p verbatim の補正）
+    }
+
+    // ================= アンカー追従（AnchorPersistence から呼ばれる経路） =================
+
+    /// <summary>保存済みアンカーから再構成した姿勢を採用する（起動時の復元・取り消し後の再採用）。
+    /// 状態を Locked にし、以後は <see cref="SetAnchoredPose"/> による追従を受け付ける。
+    /// <see cref="OnLocked"/> は鳴らさない（→ <see cref="OnRestored"/> の注記）。</summary>
+    /// <param name="restored">起動時の復元なら true（<see cref="OnRestored"/> を発火する）。</param>
+    public void AdoptAnchoredPose(Vector3 pos, Quaternion rot, float scale, bool restored)
+    {
+        if (splatRoot == null) return;
+        if (_smoothCo != null) { StopCoroutine(_smoothCo); _smoothCo = null; }
+        SetSplatPose(scale, rot, pos);
+        state = AlignState.Locked;
+        _anchored = true;
+        Debug.Log($"[AlignmentManager] アンカー由来の姿勢を採用（{(restored ? "復元" : "再採用")}）: " +
+                  $"pos={pos} rotY={rot.eulerAngles.y:F1} scale={scale:F4} → Locked");
+        if (restored) OnRestored?.Invoke();
+    }
+
+    /// <summary>アンカー追従による毎フレームの更新。<see cref="IsAnchored"/> の間だけ効く
+    /// （他の経路で姿勢が変わった後に古いアンカーで上書きしないため）。</summary>
+    public void SetAnchoredPose(Vector3 pos, Quaternion rot, float scale)
+    {
+        if (splatRoot == null || !IsAnchored || _smoothCo != null) return;
+        SetSplatPose(scale, rot, pos);
+    }
+
+    /// <summary>いまの姿勢を保存し終えたので、アンカー追従の管理下に戻す（AnchorPersistence が保存完了時に呼ぶ）。</summary>
+    public void MarkAnchored()
+    {
+        if (state == AlignState.Locked) _anchored = true;
     }
 
     private System.Collections.IEnumerator SmoothApply(float sigma, Quaternion rot, Vector3 pos,
@@ -417,7 +493,7 @@ public class AlignmentManager : MonoBehaviour
         if (full)
         {
             if (OVRInput.GetDown(OVRInput.Button.One))   Lock();              // A: 確定
-            if (OVRInput.GetDown(OVRInput.Button.Two))   ResetPose();         // B: 初期姿勢にリセット
+            if (OVRInput.GetDown(OVRInput.Button.Two) && ResetButtonEnabled) ResetPose();   // B: 初期姿勢にリセット
             if (OVRInput.GetDown(OVRInput.Button.Four))  Unlock();            // Y: 再調整
         }
         if (OVRInput.GetDown(OVRInput.RawButton.RThumbstick)) RecenterInFront();        // 右スティック押込: 目の前に呼び寄せ
@@ -441,11 +517,14 @@ public class AlignmentManager : MonoBehaviour
         Vector3 right = Vector3.ProjectOnPlane(headAnchor != null ? headAnchor.right : Vector3.right, Vector3.up).normalized;
         Vector3 move = (fwd * r.y + right * r.x) * moveSpeed * dt;
         move += Vector3.up * (l.y * moveSpeed * dt);
-        if (move.sqrMagnitude > 0f) splatRoot.position += move;
+        if (move.sqrMagnitude > 0f) { splatRoot.position += move; _anchored = false; }
 
         // --- ヨー回転（頭位置を軸に） ---
         if (Mathf.Abs(l.x) > 0f)
+        {
             splatRoot.RotateAround(pivot, Vector3.up, l.x * yawSpeed * dt);
+            _anchored = false;
+        }
 
         // --- スケール（頭位置 Pivot で等方） ---
         // SticksOnly では触らない。CP 測量中は両トリガーが「記録」「1 つ戻る」に割り当たっており、
@@ -464,6 +543,7 @@ public class AlignmentManager : MonoBehaviour
     // 頭位置などを Pivot に等方スケール（Pivot のワールド位置を固定）
     private void ScaleAround(Vector3 pivot, float factor)
     {
+        _anchored = false;
         splatRoot.localScale *= factor;
         splatRoot.position = pivot + (splatRoot.position - pivot) * factor;
     }
@@ -482,6 +562,7 @@ public class AlignmentManager : MonoBehaviour
     {
         if (state == AlignState.Adjusting) return;
         state = AlignState.Adjusting;
+        _anchored = false;
         Debug.Log("[AlignmentManager] UNLOCK (re-adjust)");
     }
 
@@ -500,6 +581,7 @@ public class AlignmentManager : MonoBehaviour
     public void AutoLevelAndFloorSnap()
     {
         if (splatRoot == null) return;
+        _anchored = false;   // Locked のままでも呼べる（スティック押込）。姿勢が変わるのでアンカー追従から外す
 
         // 1) 水平化: ヨーだけ残してロール/ピッチを除去
         float yaw = splatRoot.eulerAngles.y;
@@ -532,6 +614,7 @@ public class AlignmentManager : MonoBehaviour
     {
         if (splatRoot == null || headAnchor == null) return;
         if (state == AlignState.Locked) Unlock();   // 修正6: 姿勢を動かす操作は必ず Adjusting で行う
+        _anchored = false;
         Vector3 fwd = Vector3.ProjectOnPlane(headAnchor.forward, Vector3.up).normalized;
         if (fwd.sqrMagnitude < 1e-6f) fwd = Vector3.forward;
         splatRoot.position = headAnchor.position + fwd * distance;
@@ -551,11 +634,40 @@ public class AlignmentManager : MonoBehaviour
     public void SetSplatVisible(bool visible)
     {
         if (_splatVisible == visible) return;
+        if (_fadeCo != null) { StopCoroutine(_fadeCo); _fadeCo = null; }   // フェード中の切替は即時で確定させる
         _splatVisible = visible;
         if (splatController != null) { if (_splatVisible) splatController.Show(); else splatController.Hide(); }
         else if (splatRoot != null) splatRoot.gameObject.SetActive(_splatVisible); // フォールバック
         Debug.Log("[AlignmentManager] 3DGS visible = " + _splatVisible);
         if (sendDebugOverUdp && udpManager != null) udpManager.Send("ALIGN_TOGGLE visible=" + _splatVisible);
+    }
+
+    private Coroutine _fadeCo;
+
+    /// <summary>3DGS を不透明度 0 から徐々に表示する（デモで姿勢が確かめられた瞬間に使う）。
+    /// パッと出すより「現れた」ことが伝わり、来場者が見落としにくい。途中で X が押されたら打ち切る。</summary>
+    public void FadeInSplats(float seconds)
+    {
+        if (_splatVisible) return;   // 既に出ている／フェード中（出し直すと一瞬消えてちらつく）
+        if (splatController == null || seconds <= 0f) { SetSplatVisible(true); return; }
+        _splatVisible = true;
+        splatController.SetOpacity(0f);
+        _fadeCo = StartCoroutine(FadeRoutine(seconds));
+        Debug.Log($"[AlignmentManager] 3DGS をフェードイン（{seconds:F1}s）");
+    }
+
+    private System.Collections.IEnumerator FadeRoutine(float seconds)
+    {
+        float t = 0f;
+        while (t < seconds)
+        {
+            if (!_splatVisible) { _fadeCo = null; yield break; }
+            splatController.SetOpacity(Mathf.SmoothStep(0f, 1f, t / seconds));
+            t += Time.unscaledDeltaTime;
+            yield return null;
+        }
+        if (_splatVisible) splatController.Show();
+        _fadeCo = null;
     }
 
     private Vector2 Deadzone(Vector2 v)

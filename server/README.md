@@ -10,54 +10,68 @@ Quest 3 から UDP で送られてくるキーフレーム（パススルーカ�
 
 ---
 
-## セットアップ
+## セットアップ（PC ごとに一度）
 
-Quest と**同じ LAN** にある PC で実行する。
+Quest と**同じ LAN** にある Windows 10/11 の PC（**NVIDIA GPU 推奨**）で、**`server\setup_windows.bat` をダブルクリック**する。何度実行しても安全（足りないものだけを入れる）。初回は 10〜30 分ほどかかり、WSL 側で数 GB（CUDA 版 torch など）をダウンロードする。
 
-### Windows 側（受信・返送・GUI）
+| 段 | やること |
+|---|---|
+| 1 | Python 3.9 以上を探す（無ければ winget で Python 3.12 を入れるか尋ねる）→ `server\.venv` を作り `requirements.txt` を入れる。壊れた `.venv`（元の Python を消した等）は作り直す |
+| 2 | WSL2 と CV 用のディストリを決める。CV 環境（`~/vptcv`）のあるディストリをそのまま使い、無ければ **Ubuntu-24.04** に作る（それも無ければ `wsl --install -d Ubuntu-24.04` を尋ねる。初回は Windows の再起動と Ubuntu のユーザー作成が要る）。WSL1 なら WSL2 へ変換する（WSL1 は GPU を使えない） |
+| 3 | そのディストリで `setup_wsl.sh` を実行: OS パッケージ（python3-venv / git / libgl1 / glib。**sudo のパスワードを聞かれる**）→ venv → torch（GPU が見えれば CUDA 12.4 版）→ CV 依存 → LightGlue と hloc → 動作確認と**重みの事前取得** |
+| 4 | 使うディストリを `launch_config.json` に記録する（`run.py` の CV 自動起動が読む） |
+| 5 | ファイアウォール: Quest → PC の UDP 50000 を許可する規則を作る（管理者の許可を求める）。ネットワークが**「パブリック」**ならパブリックでも許可するかを尋ねる。Python を遮断する規則があれば無効にする（→「ネットワーク」） |
+| 6 | `scene_data/` のシーンを調べ、再ローカライズ DB の無いものはその場で作るかを尋ねる |
+
+- **版の固定**: WSL 側は動作確認済みの組み合わせを入れる — Ubuntu 24.04 / Python 3.12 / torch 2.6.0+cu124・torchvision 0.21.0 / hloc `c13273b`（1.5）/ LightGlue `eb42fee` / その他は `constraints-cv.txt`（pycolmap==3.13.0・numpy 2.4 等）。公開後に依存の新版が出ても同じ組み合わせを再現するため。Python 3.12 以外のディストリでは制約を外して入れる（警告が出る）。版を上げるときは `setup_wsl.sh` の先頭と `constraints-cv.txt` を同時に直す。
+- **重みの事前取得**: hloc は初回の使用時に NetVLAD・LightGlue の重みをネットから取る。インターネットの無い展示会場で初めて動かすとそこで止まるので、セットアップの最後（`python -m vptserver.cv.check_env`）で取得しておく（`~/.cache/torch/hub`。SuperPoint は hloc に同梱）。
+- **GPU**: Windows 側に NVIDIA のドライバがあれば WSL2 から CUDA が使える（WSL 内に CUDA を入れる必要は無い）。GPU が無くても動くが、1 枚に十数秒以上かかり位置合わせに何分もかかる。ドライバを後から入れたら `setup_windows.bat` を再実行すると CUDA 版の torch に入れ替わる。
+- `setup_windows.bat` の引数は `python -m vptserver.setup_windows` へ渡る（`--distro <名前>` / `--skip-firewall` / `--skip-wsl` / `--cv-venv <場所>`）。
+
+### 手動でセットアップする場合（参考）
 
 ```powershell
-cd server
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+# Windows（server フォルダで）
+py -3 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
 ```
-
-### WSL2 側（CV）
 
 ```bash
-python3 -m venv ~/vptcv          # ホーム直下に作る（/mnt/c は遅い）
-source ~/vptcv/bin/activate
-python -m pip install -U pip wheel
-
-cd /mnt/c/<repo への WSL2 パス>/server
-pip install -r requirements.txt -r requirements-cv.txt
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-
-# hloc は PyPI に無い → GitHub からサブモジュール込みで導入
-cd ~ && git clone --recursive https://github.com/cvg/Hierarchical-Localization.git
-cd Hierarchical-Localization && pip install -e .
-
-# 確認
-python -c "import numpy, cv2, pycolmap, torch; from hloc import extract_features; print('CV OK', torch.cuda.is_available())"
+# WSL2（setup_windows.bat が呼ぶものと同じ。再実行しても安全）
+bash /mnt/c/<repo への WSL2 パス>/server/setup_wsl.sh
+#   環境変数: VPT_CV_VENV（既定 ~/vptcv）/ VPT_HLOC_DIR（既定 ~/hloc）/ VPT_TORCH_CPU=1（CPU 版 torch）
 ```
 
-CV 依存の確定版: **torch cu124 / pycolmap==3.13.0 / numpy 2.x**（`requirements-cv.txt`）。
+---
+
+## シーン DB の構築（シーンごとに一度）
+
+`scene_data/<name>/` に COLMAP 一式を置き（→「シーンデータの配置」）、**`build_scene_db.bat` をダブルクリック**する（DB の無いシーンをすべて。`build_scene_db.bat studio` で指定）。WSL2 の GPU で 1 シーン数分〜数十分。中身は WSL2 での次と同じ:
+
+```bash
+python -m vptserver.cv.hloc_db --scene scene_data/<name>
+```
 
 ---
 
 ## 実行
 
-```bash
-# 0) シーンごとに一度（WSL2/GPU）: 再ローカライズ DB の構築
-python -m vptserver.cv.hloc_db --scene scene_data/<name>
+| 用途 | ダブルクリック | 保存先 |
+|---|---|---|
+| 評価実験 | `start_experiment.bat` | `received/` |
+| デモ展示 | `start_demo.bat` | `received_demo/` |
 
-# 1) Windows: 受信・返送・GUI（起動ごとに received/session_<時刻>/ と cv.json を生成）
-python run.py
+**`run.py` が WSL2 の CV（`localize`）を自動で起動・終了する**（`vptserver/cv_launcher.py`）。WSL2 のターミナルを開く必要はない。
 
-# 2) WSL2: 最新セッションを自動追従し、cv.json をライブ反映して Sim(3) を更新
-python -m vptserver.cv.localize
-```
+- `localize` の監視先（`--watch`）は `run.py` の `--out` から決まる。以前は 2 つのターミナルで手で合わせる必要があり、食い違うとキーフレームが届くのに位置合わせが永遠に返らなかった。
+- CV の出力は `run.py` のコンソールに `[cv]` 付きで流れ、`<out>/cv.log` にも残る。GPU を使えないときは起動時に `CUDA: NOT available` と出る。
+- **ウインドウを閉じると `localize` も終わる**（GUI を閉じる・コンソールの ×・Ctrl-C）。`run.py` が強制終了されても、`localize` は標準入力の EOF を見て自分で終わる（`--exit-on-stdin-eof`・`cv/lifecycle.py`）。
+- `localize` が落ちたら 5 秒後に起動し直す。起動直後に 3 回続けて落ちたら設定の問題とみなして諦め、理由を出す（ログは `<out>/cv.log`）。
+- 同じ保存先を別の `localize`（手で起動したもの）が処理中なら、それを使い、終わったら引き継ぐ（ベースの生存信号で判定）。
+- シーンが決まらない（DB 付きのシーンが複数あり `--scene` も無い）ときは、GUI でシーンを選んだ時点で起動する。
+- ディストリは `launch_config.json`（`setup_windows.bat` が書く）→ CV 環境のあるものを自動で探す、の順で決まる。
+
+`.bat` の引数は `run.py` へ渡る（例: `start_demo.bat --scene scene_data/studio`）。コンソールから直接動かすなら `.venv\Scripts\python run.py --out received`。
 
 `run.py` のオプション:
 
@@ -66,11 +80,18 @@ python run.py --verbose            # 届いた全データグラムの送信元 
 python run.py --no-beacon          # ビーコンを止める（手動 IP 運用）
 python run.py --scene scene_data/example2 --every 5 --min 5
 python run.py --port 50000 --beacon-port 50001 --out received
+python run.py --no-cv              # CV を自動起動しない（WSL2 で手で起動する。下記）
+python run.py --wsl-distro Ubuntu-24.04 --cv-venv ~/vptcv   # ディストリ・venv を指定（launch_config.json に記録）
 ```
 
-**停止は Ctrl-C**（受信がアイドル中でも即停止する）。
+`--no-cv` のときの WSL2 側（`--watch` は `run.py` の `--out` と同じ名前にする）:
 
-**設定は `run.py` 側に集約される。** `--scene`/`--every`/`--min` は `session/cv.json` に書かれ、WSL2 の `localize` がそれを読む（ライブ反映）。よって **WSL2 は引数なしでよい**。`scene_data/` にビルド済みシーンが 1 つなら scene の指定も要らない（自動検出）。GUI からも編集できる。
+```bash
+source ~/vptcv/bin/activate && cd /mnt/c/<repo への WSL2 パス>/server
+python -m vptserver.cv.localize --watch received
+```
+
+**設定は `run.py` 側に集約される。** `--scene`/`--every`/`--min` は `session/cv.json` に書かれ、WSL2 の `localize` がそれを読む（ライブ反映）。`scene_data/` にビルド済みシーンが 1 つなら scene の指定も要らない（自動検出）。GUI からも編集できる。
 
 ### 運用契約: 1 回の `run.py` 実行 ＝ 1 セッション
 
@@ -82,7 +103,8 @@ python run.py --port 50000 --beacon-port 50001 --out received
 
 ## ネットワーク
 
-- PC のファイアウォールで **UDP 50000（データ）の受信**を許可する（Windows は初回ダイアログで「許可」）。
+- PC のファイアウォールで **UDP 50000（データ）の受信**を許可する。`setup_windows.bat` が規則「VPTAligned3DGS (UDP 50000 in)」を作る。
+  - **「パブリック」のネットワークで詰まりやすい**（会場・学内の Wi-Fi はパブリック扱いが多い）。初回のダイアログで既定のまま「許可」を押すとプライベートだけが許可され、パブリックには**ブロック規則**が作られる。ブロックは許可より優先されるので、規則を足しても届かない。`setup_windows.bat` はパブリックでの許可を尋ね、Python のブロック規則を無効にする。届かなくなったら `setup_windows.bat` を再実行する。
 - ポート: **50000** データ（Quest→PC）/ **50001** ビーコン（PC→LAN ブロードキャスト）/ **50002** 結果・PONG（PC→Quest）。
 - **自動検出のしくみ**: サーバが 1 秒ごとに `b"VPTSRV1" + uint16(データポート)` を `:50001` へブロードキャスト → Quest（`UDPManager`, `autoDiscovery=true`）が**パケットの送信元 IP** を PC の IP として自動採用 → そこへユニキャスト送信する。学習した IP は PlayerPrefs に保存され、次回起動時はビーコンを待たずに使われる。
 - AP がブロードキャストを遮断する環境（大学 WiFi 等）では届かない → Quest の `UDPManager.manualIPAddress` に PC の IPv4 を固定する（自動検出より優先。ユニキャストは通る）。切り分け手順は `../unity/OperationGuide.md` §6。
@@ -108,10 +130,13 @@ Quest 側 `UDPManager.cs` / `KeyframeUploader.cs` と一致していること。
 | 5 PING / 6 PONG | 双方向 | 疎通確認。Quest が 2 秒ごとに PING、PC が即 PONG。`reqId` に seq を載せて往復させ RTT を取る |
 | 7 EVENT | Quest→PC | 実験ログ 1 行。PONG の `ev_ack` で受領確認し、未達分を Quest が再送する |
 
-PONG の payload: `{"seq","session","kf","cv_alive","cv_age","cv_scene","cv_window","ev_ack",…}`
+PONG の payload: `{"seq","session","kf","cv_alive","cv_age","cv_scene","cv_window","cv_ok","cv_done","cv_busy","cv_on","ev_ack",…}`
 
 - **なぜ PING/PONG が要るか**: Quest 側が「送信先 IP を知っている」ことと「サーバが動いている」ことは**別物**。IP は前回起動時の学習値が PlayerPrefs に残り、手動設定もできるため、`run.py` を起動していなくても送信先は埋まる。往復を確認しない限り疎通判定にならない。
 - **`cv_alive`**: WSL2 の `localize.watch` がセッションフォルダへ 2 秒ごとに書く `cv_heartbeat.json` の鮮度（既定 8 秒で失効）。`run.py` だけ動いていて CV が未起動だと、キーフレームは保存されるのに Sim(3) が永遠に返らない。外からは「位置合わせが失敗している」ようにしか見えないので、Quest へ伝えて試行を始める前に止められるようにしている。
+- **`kf` / `cv_ok` / `cv_done`**: このセッションで `run.py` が受け取った枚数 / CV が採用した枚数 / CV が処理し終えた枚数（採否を問わず解き直しまで済んだ分。ハートビートの `done`）。Quest のデモ展示は、採用枚数で収集を区切り、`cv_done ≥ kf` かつ処理中でないことで「PC が全部処理し終えた」と判定する（`unity/ImplementationSpec.md` §3.3・§14.4）。
+- **生存信号は別スレッドが書く**（`vptserver/cv/heartbeat.py`）。hloc の処理中も 2 秒ごとに更新されるので、PC が遅くても「処理中」と「停止」を取り違えない。セッションのフォルダには進み具合、`--watch` のベースのフォルダには生存と処理中のセッション名を書く。
+- **`cv_on`**: このセッションにまだハートビートが無いとき（Quest の RESET 直後、CV が前のセッションの処理を終えていない）、ベースのハートビートから「CV が今処理しているセッション名」を入れる。Quest はこれで「止まった」ではなく「片付け中」と判断して待つ。このとき枚数（`cv_ok` 等）は載せない（前のセッションの枚数と取り違えさせない）。
 - 副次的な効果として、キーフレームを 1 枚も送っていない段階で PC が Quest の IP を学習できる。
 
 `keyframe.K_for_image()` は送信画像サイズ `(w,h)` に合わせて K をスケールする（正方ピクセル＋中央縦クロップ前提）。**CV はこちらを使う。**
@@ -152,7 +177,7 @@ scene_data/example1/
 | `min_inliers` | 30 | KF 採否（PnP インライア下限）|
 | `min_inlier_ratio` | 0.40 | 解の公開に必要なインライア率 |
 | `max_rmse` | 0.08 m | world 残差 RMSE の上限 |
-| `scale_range` | [0.5, 2.0] | \|s\| の緩い妥当域 |
+| `scale_range` | [1e-3, 1e3] | \|s\| の**健全性**のみ（発散・NaN を落とす）。`--scale-range LO HI`。**シーンの実スケール付近に締めないこと** — COLMAP の 1 unit が何 m かは再構成ごとに違う（`ImplementationSpec.md` §5.5）|
 | `min_baseline_m` | 1.50 m | カメラ中心の最大間隔（その場で首を振っただけを弾く）|
 | `min_second_extent_m` | 0.40 m | 第 2 主成分の広がり（一直線を弾く）|
 | `expected_scale` | None | シーン既知スケール。**評価実験では使わない**（正しさには不要で、主張が弱くなる）|
@@ -192,9 +217,12 @@ python -m tests.test_gates             # 品質ゲートの純粋関数
 python -m tests.test_alignment_gates   # 退化（共面・共線）と反射固定の効果
 python -m tests.test_liveness          # PING/PONG・CV ハートビート
 python -m tests.test_events            # type=7 EVENT の振り分け・重複除去・CP JSON 書き出し
+python -m tests.test_heartbeat         # CV の生存信号（処理中も別スレッドで更新・前のセッションを処理中なら cv_on）
+python -m tests.test_cv_launcher       # CV の自動起動（wsl.exe の出力・日本語/空白のパス・終了の連動・再起動の方針）
+python -m tests.test_setup_windows     # セットアップの判断（ディストリの選び方・DB の状態・ファイアウォール）
 ```
 
-`test_liveness.py` と `test_events.py` は **C# のソースを読んで定数名・鍵名の一致を機械的に検査する**。プロトコルを変えたときに片側だけ直す事故を防ぐため。hloc/pycolmap を使う部分は WSL2 実機でしか確認できない。
+`test_liveness.py` と `test_events.py` は **C# のソースを読んで定数名・鍵名の一致を機械的に検査する**。プロトコルを変えたときに片側だけ直す事故を防ぐため。hloc/pycolmap を使う部分と、WSL・ファイアウォールを実際に操作する部分（`cv_launcher` の起動・終了、`setup_windows` / `setup_wsl.sh`）は実機でしか確認できない。WSL 側の環境は `python -m vptserver.cv.check_env` で確かめられる。
 
 ---
 
@@ -202,11 +230,19 @@ python -m tests.test_events            # type=7 EVENT の振り分け・重複�
 
 ```
 server/
-├─ run.py                    エントリポイント（UDP 受信 → 再構成 → 保存 ＋ ビーコン ＋ Sim(3) 返送 ＋ GUI）
+├─ setup_windows.bat         初回のセットアップ（ダブルクリック。→ vptserver/setup_windows.py と setup_wsl.sh）
+├─ start_experiment.bat      評価実験の起動（run.py ＋ CV の自動起動。保存先 received/）
+├─ start_demo.bat            デモ展示の起動（同。保存先 received_demo/）
+├─ build_scene_db.bat        シーンの再ローカライズ DB の構築（WSL2）
+├─ scripts/run_server.cmd    start_*.bat の共通部分
+├─ setup_wsl.sh              WSL2 の CV 環境の構築（版を固定。再実行しても安全）
+├─ launch_config.json        この PC の WSL ディストリ・venv（setup が書き、run.py が読む。.gitignore 済み）
+├─ run.py                    エントリポイント（UDP 受信 → 再構成 → 保存 ＋ ビーコン ＋ Sim(3) 返送 ＋ GUI ＋ CV の起動）
 ├─ test_send.py              疎通テスト用のダミー送信（Quest 不要）
 ├─ rigs_probe.py             pycolmap の .rigs クラッシュを切り分ける最小再現スクリプト
 ├─ requirements.txt          受信・保存のコア依存（numpy / opencv / customtkinter）
-├─ requirements-cv.txt       CV 依存（pycolmap==3.13.0 ほか。torch と hloc は別途）
+├─ requirements-cv.txt       CV 依存（pycolmap==3.13.0 ほか。torch と hloc は setup_wsl.sh が入れる）
+├─ constraints-cv.txt        CV の動作確認済みの版（setup_wsl.sh が pip の制約に使う）
 ├─ received/                 保存先（自動生成。1 セッション = 1 Quest ワールド座標系）
 ├─ scene_data/<name>/        COLMAP 一式（sparse/0 + images/ を DB に使用）
 ├─ analysis/
@@ -225,7 +261,12 @@ server/
    ├─ storage.py             jpg + json 保存
    ├─ beacon.py              サーバ存在通知ビーコン（Quest の自動検出用）
    ├─ gui.py                 customtkinter の GUI（未導入ならヘッドレスで動く）
+   ├─ cv_launcher.py         WSL2 の localize の起動・監視・終了（ディストリの検出・パスの変換）
+   ├─ setup_windows.py       初回のセットアップ（WSL・ファイアウォール・シーン DB）
    └─ cv/
+      ├─ check_env.py        CV 環境の確認と重みの事前取得（setup_wsl.sh の最後）
+      ├─ heartbeat.py        CV の生存信号（別スレッドで 2 秒ごと）
+      ├─ lifecycle.py        起動元が終わったら localize も終わる（標準入力の EOF）
       ├─ colmap_model.py     COLMAP sparse(.bin) リーダ（numpy のみ）
       ├─ geometry.py         qvec→R / カメラ中心 / Umeyama（反射固定可）/ Sim(3) / RANSAC
       ├─ gates.py            品質ゲート（純粋関数）
@@ -236,4 +277,6 @@ server/
 
 GUI（customtkinter のネイティブウインドウ）には、Quest の接続状態・受信数・現在のセッション・最新 Sim(3)（scale/inliers/rmse）・イベントログが出る。設定の編集は即座に `cv.json` へ反映される。customtkinter が入っていなければヘッドレスで動く。
 
-`received/` `scene_data/` `analysis_out/` `Hierarchical-Localization/` `.venv/` は `.gitignore` 済み。
+`received/` `received_demo/` `scene_data/` `analysis_out/` `Hierarchical-Localization/` `.venv/` `launch_config.json` は `.gitignore` 済み。
+
+**`.bat` / `.cmd` は ASCII だけで書き、CRLF で取り出す**（`.gitattributes`）。cmd.exe は LF だとラベルへのジャンプを外すことがあり、非 ASCII はコード ページで化ける。また `( )` のブロックの中でパスを展開しない（`VPT (1)` のような括弧入りのフォルダ名でブロックが壊れる。ZIP を二度展開するとよく付く）。日本語の案内は Python 側で出す。**`setup_wsl.sh` は LF**（CR が混ざると bash が落ちる。念のため setup は LF に直した一時ファイルを実行する）。

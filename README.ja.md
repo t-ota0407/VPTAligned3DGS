@@ -23,7 +23,9 @@ Meta Quest 3 のビデオパススルー（VPT）と 3D Gaussian Splatting（3DG
 │  └─ projects/VPTAligned3DGS/       Unity プロジェクト本体
 │     └─ Assets/Scripts/             位置合わせ・UDP 通信・実験制御
 ├─ server/                          PC 側（受信サーバ ＋ CV 再ローカライズ）
-│  ├─ run.py                         Windows: UDP 受信・Sim(3) 返送・GUI
+│  ├─ setup_windows.bat              PC の初回セットアップ（ダブルクリック）: Python・WSL2・CV 環境・ファイアウォール
+│  ├─ start_experiment.bat / start_demo.bat   サーバの起動（WSL2 の CV も起動する）
+│  ├─ run.py                         Windows: UDP 受信・Sim(3) 返送・GUI・CV の起動
 │  ├─ vptserver/cv/                  WSL2: hloc 再ローカライズ・Sim(3) 推定・品質ゲート
 │  ├─ analysis/                      評価実験の集計スクリプト
 │  └─ tests/                         純粋計算・プロトコル整合のテスト
@@ -53,7 +55,7 @@ Meta Quest 3 のビデオパススルー（VPT）と 3D Gaussian Splatting（3DG
 |---|---|---|
 | **3DGS モデル**（`.ply` と変換済みアセット） | 数百 MB〜数 GB | 自前の `.ply` を用意し、Unity Editor の `Tools > Gaussian Splats > Create GaussianSplatAsset` で変換して `Assets/3DGSModel/` に配置。`GSTestScene` の `GaussianSplatRenderer` に割り当てる |
 | **COLMAP シーン**（`server/scene_data/`） | 1 シーンあたり 1〜7 GB | 3DGS の学習に使った COLMAP 再構成（`sparse/0` ＋ `images/`）をそのまま置く |
-| **hloc**（`server/Hierarchical-Localization/`） | 別リポジトリ | `cd server && git clone --recursive https://github.com/cvg/Hierarchical-Localization` |
+| **hloc** と CV の Python 環境（WSL2） | 別リポジトリ・数 GB | `server\setup_windows.bat` が入れる（hloc はコミット `c13273b` に固定し、WSL2 の `~/hloc` に置く） |
 | **実験の受信データ**（`server/received/`） | 実行時に自動生成 | `run.py` が起動ごとに `session_<時刻>/` を作成 |
 | **Final IK / アバター** | Unity Asset Store の有償アセットで再配布不可 | 位置合わせの本筋には不要。使う場合は別途購入して `Assets/Plugins/RootMotion/` に配置 |
 
@@ -74,16 +76,19 @@ Meta Quest 3 のビデオパススルー（VPT）と 3D Gaussian Splatting（3DG
 
 ### 3.2 PC 側
 
-**重い CV は WSL2(Ubuntu)+CUDA で動かします。** pycolmap は Windows ネイティブで `reconstruction.rigs` アクセス時にクラッシュするためです。UDP 受信・Sim(3) 返送・GUI は Windows 側の `run.py` が担当し、両者は共有フォルダ（`/mnt/c`）経由で疎結合に動きます。
+**重い CV は WSL2(Ubuntu)+CUDA で動かします。** pycolmap は Windows ネイティブで `reconstruction.rigs` アクセス時にクラッシュするためです。UDP 受信・Sim(3) 返送・GUI は Windows 側の `run.py` が担当し、両者は共有フォルダ（`/mnt/c`）経由で疎結合に動きます。WSL2 側は `run.py` が起動・終了するので、普段の運用で Linux のターミナルを開く必要はありません。
 
-```bash
-# Windows 側
-pip install -r server/requirements.txt
+前提: Quest と同じ LAN にある Windows 10/11。**NVIDIA GPU を強く推奨**します（CPU でも動きますが、位置合わせに何分もかかります）。
 
-# WSL2 側（CUDA 環境）
-pip install -r server/requirements-cv.txt
-cd server && git clone --recursive https://github.com/cvg/Hierarchical-Localization
-```
+**`server\setup_windows.bat` をダブルクリック**し、質問に答えてください。何度実行しても安全で、初回は 10〜30 分ほどかかります。
+
+1. Python を探し（無ければ入れるかを尋ね）、`server\.venv` を作る
+2. **WSL2 の Ubuntu-24.04** を探す・入れる（WSL を初めて入れるときは再起動と Linux のユーザー作成が要ることがあります）
+3. そこに CV 環境を**動作確認済みの版に固定して**作り（torch 2.6.0+cu124・hloc `c13273b`・LightGlue `eb42fee`・`server/constraints-cv.txt`）、モデルの重みも取得しておく（会場にインターネットが無くても動くように）
+4. Windows のファイアウォールで UDP 50000 の受信を許可する。ネットワークが**「パブリック」**の場合は、パブリックでも許可するかを尋ねる（Windows の初回ダイアログを既定のまま許可すると、パブリックはブロックされたままになります）
+5. `server/scene_data/` の各シーンの再ローカライズ DB を作るかを尋ねる
+
+詳細・手動の手順・トラブルシュートは [`server/README.md`](server/README.md)。
 
 ポート: データ 50000（Quest→PC） / ビーコン 50001（PC→LAN ブロードキャスト） / 結果 50002（PC→Quest）。
 AP がブロードキャストを遮断する環境では、Quest 側 `UDPManager.manualIPAddress` に PC の IP を設定してください。
@@ -92,18 +97,15 @@ AP がブロードキャストを遮断する環境では、Quest 側 `UDPManage
 
 ## 4. 実行手順
 
-```bash
-# 0) シーンごとに一度（WSL2/GPU）: 再ローカライズ DB の構築
-python -m vptserver.cv.hloc_db --scene scene_data/<name>
+| 用途 | ダブルクリック（`server\` 内） | 保存先 |
+|---|---|---|
+| シーンを足したときの DB 構築（シーンごとに一度） | `build_scene_db.bat` | `scene_data/<name>/hloc/` |
+| 評価実験 | `start_experiment.bat` | `received/` |
+| デモ展示 | `start_demo.bat` | `received_demo/` |
 
-# 1) Windows: 受信・返送・GUI（起動ごとに received/session_<時刻>/ と cv.json を生成）
-python run.py
+`start_*.bat` は `run.py`（受信・返送・GUI。起動ごとに `session_<時刻>/` を作る）を起動し、`run.py` が WSL2 の CV を起動します。ウインドウを閉じると CV も止まります。引数はそのまま渡るので、シーンが複数あるときは `start_demo.bat --scene scene_data/<name>` のように指定します。
 
-# 2) WSL2: 最新セッションを自動追従し、N 枚ごとに Sim(3) を更新
-python -m vptserver.cv.localize
-```
-
-3. Quest でアプリを起動し、**部屋を歩き回りながら**左グリップでキーフレームを送信します。独立に解かれた Sim(3) が連続して一致すると確定（ロック）し、以後は空間アンカーに永続化されます。
+続いて Quest でアプリを起動し、**部屋を歩き回りながら**左グリップでキーフレームを送信します。独立に解かれた Sim(3) が連続して一致すると確定（ロック）します。デモ展示モード（最初の画面で両スティックを 3 秒押し込む）では、確定した位置合わせを空間アンカーに保存し、再起動後に復元します。
 
 **精度は「どれだけ部屋を歩いたか」でほぼ決まります。** カメラ中心が一直線・同一平面に並ぶと Sim(3) が退化し、残差が小さいまま誤った解に落ちます（詳細と対策は [`unity/Specification.md`](unity/Specification.md) §6）。
 

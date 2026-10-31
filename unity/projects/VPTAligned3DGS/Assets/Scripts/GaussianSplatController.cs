@@ -58,5 +58,9 @@ public class GaussianSplatController : MonoBehaviour
     public void Show() => SetGlobalOpacity(1f);
     public void Hide() => SetGlobalOpacity(0f);
 
+    /// <summary>グローバル不透明度を中間値で設定する（0..1）。表示のフェードイン用。
+    /// 表示状態の管理は AlignmentManager が持つので、直接呼ぶのはそこからだけにする。</summary>
+    public void SetOpacity(float value) => SetGlobalOpacity(Mathf.Clamp01(value));
+
     private static void SetGlobalOpacity(float value) => Shader.SetGlobalFloat(GlobalOpacityProp, value);
 }

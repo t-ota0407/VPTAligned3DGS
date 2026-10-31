@@ -38,6 +38,18 @@ def check(cond, label):
         _fails.append(label)
 
 
+def write_hb(path, d, age=0.0):
+    """ハートビートを書き、**ファイルの更新時刻**を age 秒前にする（run.py は更新時刻で古さを測る）。
+
+    中の "t" も同じだけ古くする。"t" は WSL の時計なので run.py は使わないが、
+    更新時刻が取れないときの代わりとして同じ値にしておく。
+    """
+    t = time.time() - age
+    d = dict(d, t=t)
+    Path(path).write_text(json.dumps(d))
+    os.utime(path, (t, t))
+
+
 def test_cv_status():
     print("== CV ハートビートの鮮度判定 ==")
     with tempfile.TemporaryDirectory() as d:
@@ -52,24 +64,73 @@ def test_cv_status():
         check(s["cv_alive"] is True and s["cv_age"] < 1.0, "直近のハートビート → 稼働中")
         check(s.get("cv_scene") == "scene_data/example1", "scene が伝わる")
 
-        hb.write_text(json.dumps({"t": time.time() - (run.CV_STALE_S + 5), "pid": 1}))
+        write_hb(hb, {"pid": 1}, age=run.CV_STALE_S + 5)
         s = run.read_cv_status(d)
         check(s["cv_alive"] is False and s["cv_age"] > run.CV_STALE_S,
               f"{run.CV_STALE_S}s より古い → 停止扱い")
 
         # 処理中は hloc が長時間ブロックしてハートビートを更新できない。
         # busy を見て猶予を延ばさないと「CV 停止」と誤表示してしまう。
-        hb.write_text(json.dumps({"t": time.time() - 30, "pid": 1, "busy": True, "busy_n": 5}))
+        write_hb(hb, {"pid": 1, "busy": True, "busy_n": 5}, age=30)
         s = run.read_cv_status(d)
         check(s["cv_alive"] is True and s["cv_busy"] is True and s["cv_busy_n"] == 5,
               "処理中(busy)なら 30 秒古くても稼働扱い")
-        hb.write_text(json.dumps({"t": time.time() - 30, "pid": 1, "busy": False}))
+        write_hb(hb, {"pid": 1, "busy": False}, age=30)
         s = run.read_cv_status(d)
         check(s["cv_alive"] is False, "busy でなければ 30 秒古いと停止扱い")
+
+        # WSL2 の時計が Windows より遅れている（スリープ復帰後に起きる）。中の "t" は 120 秒前でも、
+        # ファイルは今書かれた → 生きている。"t" で測っていた頃は「CV 停止」と誤判定した
+        hb.write_text(json.dumps({"t": time.time() - 120, "pid": 1}))
+        s = run.read_cv_status(d)
+        check(s["cv_alive"] is True and s["cv_age"] < 1.0,
+              "WSL の時計が 2 分遅れていても、ファイルの更新時刻で測るので稼働扱い")
+
+        # 処理済み枚数。デモは「送信を止めてから PC が全部処理し終えたか」を kf と比べて判定する
+        hb.write_text(json.dumps({"t": time.time(), "pid": 1, "total_ok": 9, "done": 12}))
+        s = run.read_cv_status(d)
+        check(s["cv_ok"] == 9 and s["cv_done"] == 12, "処理済み枚数(done)が cv_done として伝わる")
+        hb.write_text(json.dumps({"t": time.time(), "pid": 1}))
+        s = run.read_cv_status(d)
+        check(s["cv_done"] == 0, "done が無い古いハートビートでも cv_done=0（壊れない）")
 
         hb.write_text("これは JSON ではない")
         s = run.read_cv_status(d)
         check(s["cv_alive"] is False, "壊れたハートビート → 例外を出さず停止扱い")
+
+
+def test_cv_status_base_fallback():
+    """RESET 直後、CV が前のセッションを処理中で新しいセッションにハートビートが無いとき。
+
+    以前は「ハートビート無し＝停止」と伝わり、Quest は正常に処理中の CV を止まったと誤判定して
+    再位置合わせを 10 秒で諦めた（実機で発生）。ベースのハートビートから「生きていて、
+    別のセッションを処理中」（cv_on）を伝える。枚数は前のセッションのものなので伝えない。
+    """
+    print("== セッションにハートビートが無いとき（ベースへ切り替え） ==")
+    with tempfile.TemporaryDirectory() as base:
+        sess = Path(base) / "session_new"
+        sess.mkdir()
+        s = run.read_cv_status(sess, base)
+        check(s["cv_alive"] is False and s["cv_age"] == -1.0, "どこにも無い → ハートビート無し（cv_age=-1）")
+
+        (Path(base) / "cv_heartbeat.json").write_text(json.dumps(
+            {"t": time.time(), "pid": 1, "scene": "x", "session": "session_old", "busy": True, "busy_n": 25}))
+        s = run.read_cv_status(sess, base)
+        check(s["cv_alive"] is True and s["cv_on"] == "session_old" and s["cv_busy"] is True,
+              "ベースが新しい → 生きていて、前のセッション(session_old)を処理中と伝わる")
+        check("cv_ok" not in s and "cv_done" not in s,
+              "前のセッションの枚数は伝えない（新しいセッションの枚数と取り違えさせない）")
+        check(run.read_cv_status(sess)["cv_age"] == -1.0, "base_dir を渡さなければ従来どおり")
+
+        write_hb(Path(base) / "cv_heartbeat.json",
+                 {"pid": 1, "session": "session_old", "busy": False}, age=run.CV_STALE_S + 5)
+        s = run.read_cv_status(sess, base)
+        check(s["cv_alive"] is False and s["cv_age"] > run.CV_STALE_S, "ベースも古い → 停止扱い")
+
+        (sess / "cv_heartbeat.json").write_text(json.dumps({"t": time.time(), "pid": 1, "total_ok": 3, "done": 4}))
+        s = run.read_cv_status(sess, base)
+        check(s["cv_alive"] is True and s["cv_done"] == 4 and "cv_on" not in s,
+              "セッションにハートビートがあればそちらを使う（cv_on は付けない）")
 
 
 def test_pong_payload():
@@ -108,7 +169,7 @@ def test_cs_python_key_parity():
 
     py_keys = set(json.loads(run.build_pong_payload(
         1, "s", 0, {"cv_alive": True, "cv_age": 0.0,
-                    "cv_scene": "x", "cv_window": 3, "cv_ok": 12,
+                    "cv_scene": "x", "cv_window": 3, "cv_ok": 12, "cv_done": 14, "cv_on": "session_x",
                     "cv_pub": False, "cv_why": "rmse 超過",
                     "cv_busy": True, "cv_busy_n": 5},
         ev_ack=7, ev_n=9).decode()).keys())
@@ -135,6 +196,7 @@ def test_protocol_constants():
 
 if __name__ == "__main__":
     test_cv_status()
+    test_cv_status_base_fallback()
     test_pong_payload()
     test_cs_python_key_parity()
     test_protocol_constants()

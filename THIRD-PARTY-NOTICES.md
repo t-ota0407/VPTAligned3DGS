@@ -19,6 +19,10 @@
 これらを商用可のモデル（例: 商用ライセンスの特徴抽出/検索）に差し替えること。マッチャの
 **LightGlue は Apache-2.0**（商用可）なので、制約は主に SuperPoint/NetVLAD 側にある。
 
+本リポジトリはこれらのコード・重みを**同梱しない**。`server/setup_windows.bat`（→ `setup_wsl.sh`）が利用者の PC の
+WSL2 に各配布元から取得する（hloc・LightGlue は GitHub、重みは hloc / LightGlue が指す配布元）。
+取得した時点で、利用者が各ライセンスに従うことになる。
+
 ---
 
 ## 3DGS 表示（Unity パッケージ・同梱）

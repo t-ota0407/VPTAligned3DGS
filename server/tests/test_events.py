@@ -249,8 +249,9 @@ def test_end_to_end_socket():
         rx = UdpReceiver(data_port)
         asm = Reassembler()
 
-        class Sess:
+        class Sess:            # SessionManager の代わり（PONG の組み立てに使う dir / base だけ持つ）
             dir = d
+            base = d
         th = threading.Thread(target=run.udp_loop,
                               args=(rx, asm, Sess(), result_port, sink), daemon=True)
         th.start()

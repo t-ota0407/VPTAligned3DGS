@@ -22,6 +22,8 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 
 位置合わせは、パススルーカメラ画像を **3DGS の元になった COLMAP 再構成に再ローカライズ**し、複数キーフレームのカメラ中心から **Umeyama で Sim(3)** を解いて splatRoot に適用する。**自動位置合わせまで実機で動作確認済み。**
 
+1 つのアプリに 2 つのモード: **評価実験**（`GSTestScene`・起動時）と、位置合わせを空間アンカーで永続化して電源断を跨いで再利用する**デモ展示**（`DemoScene`。最初の画面で両スティック 3 秒押込で切替。`Specification.md` §15。**実機確認は未了**）。
+
 ---
 
 ## 2. 技術スタック（変更したらこの表とコード内コメントを必ず同期）
@@ -36,8 +38,8 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 | XR / パススルー | Unity OpenXR + Meta OpenXR feature ＋ **Meta XR Core SDK / MRUK** | |
 | カメラ映像 | **`PassthroughCameraAccess`**（MRUK v81+） | 旧 `WebCamTextureManager`/`PassthroughCameraUtils` は非推奨。権限は `HEADSET_CAMERA` のみ |
 | ビルド | Android / ARM64 / IL2CPP | |
-| PC 側 CV | **WSL2(Ubuntu)+CUDA**（hloc / pycolmap） | pycolmap は Windows ネイティブで落ちる |
-| PC 側 受信・返送・GUI | **Windows `run.py`** | 共有フォルダ `/mnt/c` 経由で WSL2 と疎結合 |
+| PC 側 CV | **WSL2(Ubuntu-24.04)+CUDA**（hloc / pycolmap） | pycolmap は Windows ネイティブで落ちる。版は `server/setup_wsl.sh` と `constraints-cv.txt` で固定（torch 2.6.0+cu124・hloc `c13273b`） |
+| PC 側 受信・返送・GUI | **Windows `run.py`** | 共有フォルダ `/mnt/c` 経由で WSL2 と疎結合。**WSL2 の `localize` は `run.py` が起動・終了する**（`vptserver/cv_launcher.py`）。利用者は `setup_windows.bat` → `start_experiment.bat` / `start_demo.bat` をダブルクリックするだけ |
 | Unity MCP | Unity 公式 AI Assistant（`com.unity.ai.assistant`） | Editor 内の Unity Bridge 経由 |
 
 詳細（バージョン要件・権限・プロジェクト設定）は `ImplementationSpec.md` §11。
@@ -94,6 +96,7 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 | **座標規約**（verbatim → 反射 → 負スケール／K の中央縦クロップ）を変えない | `ImplementationSpec.md` §2 |
 | **反射は `handedness=-1` で固定**（自由推定に戻さない）。配置ゲートを外さない | `Specification.md` §6 / `ImplementationSpec.md` §5 |
 | **確定は連続一致で判定する**（残差では正しさを判定できない） | `ImplementationSpec.md` §5.3 |
+| **ゲートの既定値にシーン固有の量を入れない**（COLMAP の 1 unit が何 m かは再構成ごとに違う）。**品質しきい値は PC 側 `cv.json` に一本化し、Quest 側に複製しない** | `ImplementationSpec.md` §5.5 |
 | **試行のリセットは Quest と PC の対で行う**（`ResetForNewTrial` と type=4 RESET） | `ImplementationSpec.md` §9.2 |
 | **コードで作るマテリアルのシェーダは `Always Included Shaders` に登録する**。ギズモの描画は `CpGizmos.Draw()` で包み、状態遷移の**後ろ**に置く | `ImplementationSpec.md` §9.5-6 |
 | **HUD の文言は英語のみ**（日本語はログと `[Tooltip]` に限る）。全ボタンに物理割当を用意する | `ImplementationSpec.md` §10.4 / `OperationGuide.md` §5-2 |
@@ -101,6 +104,14 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 | **`HasTarget` を疎通判定に使わない**（`ServerAlive` を使う） | `ImplementationSpec.md` §3.3 |
 | **`.ply` を実行時に直接読まない**（必ず Editor でアセット変換を経る） | §7 |
 | **OpenXR パススルー層からカメラ画像は取れない**（PCA を使う） | `Specification.md` §4.1 |
+| **デモと実験は同じ APK の別シーン。保存ファイルを分ける**（デモは `vptalign_demo_*`。同名だと実験の試行開始の `ClearSaved` がデモの保存を消す）。**実験側の永続化 OFF は `ExperimentController.Awake` で行う**（`Start` だと復元と順序が不定）。切替（両スティック 3 秒）は作業の途中・測った記録が PC 未送達のときは受け付けない。**送信待ちがあるだけでは止めない**（起動時の行が常に残っており、PC 無しでデモに入れなくなる） | `Specification.md` §15.1 / `ImplementationSpec.md` §7.1・§14.1 |
+| **位置合わせはワールド座標で保存しない**（原点は起動・電源断で変わる）。**アンカーから見た相対姿勢**で保存し、復元は複数アンカーの多数決で行う | `Specification.md` §15.2・§15.5 / `ImplementationSpec.md` §7 |
+| **アンカー追従は `AlignmentManager.IsAnchored` の間だけ**姿勢を書き換える。姿勢を変える経路を足したら `_anchored=false` に落とす（落とさないと古いアンカーが新しい姿勢を上書きする） | `ImplementationSpec.md` §6.1・§7.3 |
+| **デモでは合っている確信の無い姿勢を来場者に見せない**（多数決が揃うまで非表示）。来場者に残す入力は X だけ | `Specification.md` §15.4 / `ImplementationSpec.md` §14 |
+| **`GSTestScene` と `DemoScene` は共通部分を二重に持つ**。リグ・`Managers`・スプラットの設定を変えたら両方を直す | `ImplementationSpec.md` §14.1 |
+| **公開前提: 作者の PC に依存しない**。WSL のディストリ名・パス・ユーザー名を決め打ちしない（既定のディストリに CV 環境があるとは限らない）。WSL 側の版を上げるときは `setup_wsl.sh` の先頭と `constraints-cv.txt` を同時に直し、実機で通す | `ImplementationSpec.md` §1 / `server/README.md`「セットアップ」 |
+| **`server/` の `.bat`・`.cmd` は ASCII＋CRLF、`( )` ブロックの中でパスを展開しない**（括弧入りのフォルダ名で壊れる）。日本語の案内は Python 側で出す。`setup_wsl.sh` は LF | `server/README.md`「構成」 |
+| **CV の生存（ハートビート）の古さはファイルの更新時刻で測る**（中の `t` は WSL の時計で、スリープ復帰後にずれる） | `ImplementationSpec.md` §1 |
 
 ---
 
@@ -119,7 +130,7 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 - 1 つの変更は小さく。MCP 操作・コンパイル確認・動作確認をこまめに挟む。
 - マジックナンバー（スケール係数・軸反転など座標変換に関わる値）は定数化し、根拠をコメントする。
 - 外部リポジトリ（UnityGaussianSplatting / Meta サンプル）のコードを取り込む場合は、**出所とライセンスをコメントに残す**。
-- **`server/` の Python を編集したら**、純粋計算は `python -m tests.test_geometry` 等で検証する（`server/README.md` のテスト節）。hloc/pycolmap を使う部分は WSL2 実機でしか確認できないので、ユーザーに実行を依頼してログで確認する。
+- **`server/` の Python を編集したら**、純粋計算は `python -m tests.test_geometry` 等で検証する（`server/README.md` のテスト節）。hloc/pycolmap を使う部分は WSL2 実機でしか確認できないので、ユーザーに実行を依頼してログで確認する。WSL・ファイアウォールを操作する部分（`cv_launcher` / `setup_windows` / `setup_wsl.sh`）も同様。**ファイアウォールの変更・WSL の導入など管理者権限の操作は、確認なしに実行しない。**
 - **プロトコルを変えたら C# と Python の両側を直す。** `tests/test_liveness.py` と `tests/test_events.py` が鍵名・type 定数の一致を機械的に検査する。
 
 ---
@@ -127,6 +138,7 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 ## 9. ビルド & 動作確認
 
 - Build Profiles で Android に切替（早めにやる）。ARM64 / IL2CPP / Vulkan。
+- Scene List は `GSTestScene`（先頭＝起動時）と `DemoScene` の 2 つ。APK は 1 つで、起動後に両スティック 3 秒でデモへ切り替える（`OperationGuide.md` §10）。
 - 実機で確認すべき最低ライン: 両目で 3DGS が正しく描画される / パススルーが表示される / 想定フレームレートが出る / 必要権限のダイアログが出る。
 - パフォーマンス低下時はスプラット数・品質レベル・Render Mode・ソート設定を順に見直す。
 - ログは MCP 経由（Editor）と実機（`adb logcat`）の両面で確認する。

@@ -9,6 +9,8 @@
 確定したら ImplementationSpec.md §13 に反映すること。
 """
 
+import math
+
 # しきい値の既定（cv.json に無い場合に使用）
 # 役割分担（ここを間違えるとロックしなくなる）:
 #   PC 側のゲート  … 「明らかにおかしい解」を落とすだけ。候補は通す。
@@ -22,12 +24,21 @@ DEFAULT_GATES = {
     "max_rmse": 0.08,         # 解公開に許す world 残差 RMSE 上限[m]
                               # 部屋規模で 24 点を使うと残差は 5cm を超えうる。
                               # 厳しくしても正しさは上がらず、候補が消えるだけ。
-    "scale_range": [0.5, 2.0],  # |sigma| の緩い妥当域（保険。主判定は expected_scale）
+    # |sigma| の**健全性**チェック。ソルバが発散した解（0・無限大・NaN）だけを落とす。
+    # ここをシーンの実スケール付近に締めてはいけない。
+    #   COLMAP の単位は再構成ごとに決まる任意単位で、1 unit が何 m かはシーン固有。
+    #   かつて既定は [0.5, 2.0] だったが、これは「このシーンは 1 unit ≈ 1 m」という
+    #   シーン固有の前提を汎用ゲートの顔で埋め込んでいたに等しい。実際 bld2（1 unit ≈ 4.52 m）で
+    #   rmse 0.038m・インライア率 0.88 の正しい解が 16 セッション全滅し、一度もロックしなかった。
+    # スケールの正しさは expected_scale（任意）で見る。既定では見ない（§5.4）。
+    "scale_range": [1e-3, 1e3],
     # --- スケールの期待値（シーン固有・既定は無効）---
     # COLMAP の任意単位と実メートルの比は、その再構成に固有の固定値。
     # ただし **正しさのためには不要**（下の配置ゲート＋反射固定＋連続一致で誤りは 0 になる）。
     # シーン固有の知識を推定に注入すると「メトリックスケールを推定した」という主張が
     # 弱くなるため、評価実験では無効のままにする。デバッグ時に棄却理由を明示したいときだけ使う。
+    # 指定した場合は **これがスケール判定の本体**になり、上の健全性レンジは飛ばす
+    # （両方を通す作りにすると、レンジ側が先に落として expected_scale が効かない罠になる）。
     "expected_scale": None,   # 例: 0.96
     "scale_tol": 0.10,        # 期待値からの許容相対誤差（±10%）
     # --- 配置の立体性（退化の検出。ここが正しさを担保する本体）---
@@ -121,16 +132,20 @@ def should_publish(sigma, inliers, n, rmse_m, cfg=None, cond=None):
         return False, f"inlier ratio {ratio:.2f} (< {g['min_inlier_ratio']})"
     if rmse_m > g["max_rmse"]:
         return False, f"rmse={rmse_m:.4g}m(>{g['max_rmse']}m)"
-    if not (lo <= abs(sigma) <= hi):
-        return False, f"|scale| {abs(sigma):.3f} outside [{lo}, {hi}]"
 
-    # 期待スケールが分かっているなら、これが最も安価で強力な判定になる。
+    # スケールの判定は 1 段だけにする（2 段重ねると厳しいほうが黙って勝ち、
+    # expected_scale を指定しても健全性レンジ側で先に落ちる罠になる）。
     exp = g["expected_scale"]
+    asig = abs(sigma)
     if exp is not None and exp > 0:
-        dev = abs(abs(sigma) - exp) / exp
+        # 期待スケールが分かっているなら、これが最も安価で強力な判定になる。
+        dev = abs(asig - exp) / exp
         if dev > g["scale_tol"]:
-            return False, (f"|scale| {abs(sigma):.3f} deviates {dev * 100:.0f}% "
+            return False, (f"|scale| {asig:.3f} deviates {dev * 100:.0f}% "
                            f"from expected {exp:.3f}")
+    elif not (math.isfinite(asig) and lo <= asig <= hi):
+        # 既定はシーン非依存の健全性チェックのみ（発散・NaN を落とすだけ）。
+        return False, f"|scale| {asig:.3g} not finite/plausible (outside [{lo:g}, {hi:g}])"
 
     if cond is not None:
         ok, why = check_geometry(cond, cfg)

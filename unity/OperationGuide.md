@@ -22,7 +22,7 @@ VPTAligned3DGS を**セットアップし、実機で動かし、評価実験を
 ```
 
 - **Quest**: 3DGS を両眼描画しパススルーに重畳。左グリップでパススルー画像＋カメラ内部/姿勢を UDP 送信。PC から届いた Sim(3) を（品質ゲート通過時のみ）splatRoot に適用。
-- **PC(Windows) `run.py`**: UDP 受信・保存、LAN ビーコン、Sim(3) の Quest 返送、GUI。**重い CV は動かさない**。
+- **PC(Windows) `run.py`**: UDP 受信・保存、LAN ビーコン、Sim(3) の Quest 返送、GUI。**重い CV は動かさない**が、WSL2 の `localize` を起動・終了する（`start_experiment.bat` / `start_demo.bat` をダブルクリックするだけで両方が動く）。
 - **WSL2(Ubuntu+CUDA) `localize.py`**: パススルー画像を COLMAP DB に再ローカライズし、複数キーフレームのカメラ中心から **Umeyama+RANSAC で Sim(3)** を解く。
 
 > **なぜ WSL2 か**: pycolmap は Windows ネイティブでクラッシュするため、CV は WSL2 で動かす（詳細 `ImplementationSpec.md` §1）。
@@ -58,8 +58,8 @@ VPTAligned3DGS を**セットアップし、実機で動かし、評価実験を
 |---|---|
 | Unity | **6000.3.10f1** / URP（Render Graph Compatibility Mode Off）/ OpenXR **Multi-Pass** / Graphics API **Vulkan** |
 | ヘッドセット | **Quest 3 / 3S**、Horizon OS **v81 以降**（Passthrough Camera Access 用）|
-| PC | Windows、Python（`server/requirements.txt`：numpy/opencv/customtkinter）|
-| WSL2 | Ubuntu + NVIDIA GPU（CUDA）。CV 依存は `server/requirements-cv.txt`＋torch(cu124)＋hloc |
+| PC | Windows 10/11、**NVIDIA GPU 推奨**（無くても動くが位置合わせに何分もかかる）。必要なものは `server\setup_windows.bat` がすべて入れる（§4-3）|
+| WSL2 | **Ubuntu-24.04**（setup が入れる）。CV 依存は torch 2.6.0+cu124・hloc・pycolmap 3.13.0 ほか（版は `server/setup_wsl.sh` と `constraints-cv.txt` で固定）|
 | ネットワーク | PC と Quest が相互にユニキャスト可能な同一 LAN（→ §6）|
 
 ---
@@ -76,25 +76,19 @@ VPTAligned3DGS を**セットアップし、実機で動かし、評価実験を
 - メニュー **Tools > Gaussian Splats > Create GaussianSplatAsset** → 入力 `.ply` を指定 → 生成されたアセットを `GaussianSplatRenderer` に割当。
 - Quest 向けは品質 **Medium 以下**を起点に。GPU バッファ 128MB 制限に注意（採用シーンは約15万スプラット）。
 
-### 4-3. WSL2 の CV 環境
-```bash
-# Linux 用 venv（ホーム直下推奨。/mnt/c は遅い）
-python3 -m venv ~/vptcv
-source ~/vptcv/bin/activate
-python -m pip install -U pip wheel
+### 4-3. PC のセットアップ（PC ごとに一度）
 
-cd /mnt/c/<repo への WSL2 パス>/server
-pip install -r requirements.txt -r requirements-cv.txt          # numpy/opencv/pycolmap
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
-cd ~ && git clone --recursive https://github.com/cvg/Hierarchical-Localization.git
-cd Hierarchical-Localization && pip install -e . && cd ~
+**`server\setup_windows.bat` をダブルクリック**して、質問に答える。何度実行しても安全（足りないものだけを入れる）。初回は 10〜30 分ほどかかる。
 
-# 確認
-python -c "import numpy, cv2, pycolmap, torch; from hloc import extract_features; print('CV OK', torch.cuda.is_available())"
-```
+- Python が無ければ winget で入れるかを尋ねる（または python.org の Python 3.12 を「Add python.exe to PATH」付きで入れて再実行）。
+- WSL2 が無ければ `Ubuntu-24.04` を入れるかを尋ねる。**初回は Windows の再起動が要ることがある**。Ubuntu からユーザー名とパスワードを聞かれたら設定し（パスワードは直後の `sudo` で使う）、`exit` で戻る。再起動を求められたら、再起動して `setup_windows.bat` をもう一度実行する。
+- WSL 側に CV 環境（`~/vptcv`・torch・hloc）を作り、最後に `CV environment OK` と GPU（`CUDA: …`）の有無が出る。**モデルの重みもここで取得する**ので、展示会場にインターネットが無くても動く。
+- ファイアウォールの変更（UDP 50000 の受信）を尋ねる。管理者の許可を求められたら「はい」。**ネットワークが「パブリック」なら、パブリックでも許可するかを尋ねる**（§6）。
+- `scene_data/` の DB の無いシーンを作るかを尋ねる（§4-4）。
+- 最後の `Summary` に `FAIL` が無ければ完了。中身と手動の手順は `server/README.md`「セットアップ」。
 
 ### 4-4. シーンの再ローカライズ DB 構築（シーン毎に一度・WSL2/GPU）
-`server/scene_data/<name>/` に COLMAP 一式（`sparse/0` + `images/`）を置き:
+`server/scene_data/<name>/` に COLMAP 一式（`sparse/0` + `images/`）を置き、**`server\build_scene_db.bat` をダブルクリック**する（DB の無いシーンをすべて作る。`build_scene_db.bat example1` で指定）。1 シーン数分〜数十分。WSL2 で直接実行するなら:
 ```bash
 source ~/vptcv/bin/activate
 cd /mnt/c/<repo への WSL2 パス>/server
@@ -105,22 +99,17 @@ python -m vptserver.cv.hloc_db --scene scene_data/<name>       # 例: scene_data
 
 ## 5. 毎回の実行手順
 
-> **要点**: 「PC で `run.py` → WSL2 で `localize` → Quest で部屋を歩いて左グリップ送信」。`run.py` の 1 回の起動＝1 セッション。
+> **要点**: 「PC で `start_experiment.bat` → Quest で部屋を歩いて左グリップ送信」。`run.py` の 1 回の起動＝1 セッション。
 
-**① Windows（受信・返送・GUI）**
-```powershell
-cd <repo>\server
-python run.py                      # 起動毎に received/session_<時刻>/ と cv.json を生成
-```
+**① PC: `server\start_experiment.bat` をダブルクリック**
 
-**② WSL2（CV 監視。最新セッションを自動追従）**
-```bash
-source ~/vptcv/bin/activate
-cd /mnt/c/<repo への WSL2 パス>/server
-python -m vptserver.cv.localize    # 引数なし（cv.json / 自動検出でシーン解決）
-```
+`run.py`（受信・返送・GUI）が起動し、**WSL2 の CV（`localize`）も自動で起動する**。WSL2 のターミナルを開く必要はない。起動ごとに `received/session_<時刻>/` と `cv.json` を作る。
+- コンソールに `[cv] … CUDA: available` → `[cv] … watch 開始` と出れば準備完了（初回はディストリの起動で数十秒かかる）。GUI と HUD の `● CV` でも分かる。
+- シーンが複数あるときは `start_experiment.bat --scene scene_data/<name>`、または GUI でシーンを選ぶ（選んだ時点で CV が起動する）。
+- **ウインドウを閉じると CV も止まる。** CV の出力は `received/cv.log` にも残る。
+- 従来どおり手で動かすなら `run.py --no-cv` と、WSL2 で `python -m vptserver.cv.localize --watch received`（`server/README.md`「実行」）。
 
-**③ Quest（アプリ起動）**
+**② Quest（アプリ起動）**
 1. アプリを起動しパススルー＋3DGS が出るのを確認。
 2. 3DGS がズレていれば、まずコントローラで粗合わせ（→ §5-1）。
 3. **部屋の 3 か所以上の別位置**から左グリップでキーフレーム送信 → 数枚たまると自動で Sim(3) が適用され、貼り付きが合っていく。
@@ -128,7 +117,7 @@ python -m vptserver.cv.localize    # 引数なし（cv.json / 自動検出でシ
 新しいセッションは **`run.py` を再起動するだけ**（新フォルダ＋cv.json 自動生成、手動クリア不要）。
 実験で試行を繰り返すときは再起動不要で、Quest の HUD「▶ 試行 開始」が PC へ RESET を送って新セッションに切り替える（→ §9）。
 
-**位置合わせの永続化（P4）**: Lock（または自動アライン確定）時に、実部屋へ空間アンカーを**2個**保存し、合わせ込み結果を `persistentDataPath/vptalign_<modelId>.json` に記録する。次回起動時に自動復元（片方のアンカーが再発見できなくても復元可）。`modelId` は `GaussianSplatController` の欄（空なら 3DGS アセット名を自動採用）。複数モデルを使う場合はモデルごとに別ファイルになるので干渉しない。やり直したいときは `AnchorPersistence.ClearSaved()`。
+**位置合わせの永続化**: **実験（`GSTestScene`）では使わない**（試行の独立性のため自動で OFF。§9-0）。使うのはデモ展示モード（同じアプリの `DemoScene`。最初の画面で両スティックを 3 秒押し込んで入る）で、運用は §10。仕組みは、確定時に実部屋へ空間アンカー（既定 3 個）を保存し、各アンカーから見た相対姿勢を `persistentDataPath/vptalign_<modelId>.json` に記録して、次回起動時にアンカーの多数決で復元する（`ImplementationSpec.md` §7）。`modelId` は `GaussianSplatController` の欄（空なら 3DGS アセット名を自動採用）。
 
 ### 5-1. コントローラ操作（`AlignmentManager`）
 
@@ -190,6 +179,7 @@ python -m vptserver.cv.localize    # 引数なし（cv.json / 自動検出でシ
 | **左トリガー** | Real CP 測定中・Virtual CP 編集中: 仮置きがあれば**取り消し**、無ければ**1 つ前の点に戻る** |
 | 左グリップ | 単発送信（短押し）/ 自動送信トグル（長押し）。**試行中は無効**|
 | **スティック（両手）** | **Real CP 測定中・Virtual CP 編集中のみ**: 3DGS を動かす。§5-1 の割当そのまま（右=水平移動 / 左=上下・ヨー / 押込=呼び寄せ・水平化）。**トリガーのスケールは含まない** |
+| **両スティック押込 3 秒** | **デモ展示モードへ切り替え**（CP・先端校正なし。→ §10）。試行・測量・編集・校正の途中と、測った記録が PC に未送達のときは不可 |
 
 > **置く → 確かめる → 確定する（CP を設定する共通の流れ）。**
 > Real CP の測定も Virtual CP の編集も、**右トリガーだけでは確定しない**。
@@ -379,6 +369,7 @@ Editor では操作した瞬間に反映され（Play 中・Edit 中どちらで
 
 PC と Quest は**同一 LAN でユニキャストが通る**必要がある。
 
+- **ファイアウォール**: PC は UDP 50000 の受信を許可する必要がある（`setup_windows.bat` が規則を作る）。**Windows がネットワークを「パブリック」と見なしていると、既定では届かない**（会場・学内の Wi-Fi はパブリック扱いが多い。`設定 > ネットワークとインターネット` で確認できる）。初回に出る Windows のダイアログで既定のまま「許可」を押すと、プライベートだけが許可され、パブリックには**ブロック規則**が作られる（ブロックは許可より優先されるので、後から規則を足しても届かない）。HUD が `✕ Server` のまま・PC の受信枚数が 0 のままなら、まず **`setup_windows.bat` を再実行**する（パブリックでの許可と、Python のブロック規則の無効化を尋ねる）。信頼できる LAN なら、ネットワークを「プライベート」に切り替えるのでもよい。
 - **自宅ルータ等**: `run.py` の LAN ビーコン（UDP 50001）を Quest が自動検出 → 設定不要。
 - **大学 / 公共 WiFi**: ブロードキャストが遮断されビーコンが届かないことが多い。切り分けと対処:
   1. PC から `ping <QuestのIP>` を実行。
@@ -403,7 +394,7 @@ Sim(3) が永遠に返らず、試行は必ずタイムアウトする。外か�
 | HUD の表示 | 意味 | 対処 |
 |---|---|---|
 | `✕ Server` ＋ 診断行 `… (auto) — no reply` | PING に PONG が返らない | `run.py` を起動。それでも駄目なら §6 のネットワーク切り分け |
-| `✕ CV` | `run.py` は応答するが CV ワーカ未検出 | WSL2 で `python -m vptserver.cv.localize` を起動 |
+| `✕ CV` | `run.py` は応答するが CV ワーカ未検出 | `run.py` のコンソールの `[cv]` の行（`<out>/cv.log`）を見る。起動直後なら数十秒待つ。`--no-cv` で起動したなら WSL2 で `localize` を起動 |
 | `▲ CV 3` | CV が 3 枚処理中（数秒かかる） | 待つ。停止ではない |
 | `● Server 3ms   ● CV` | 疎通 OK | 試行を開始できる |
 
@@ -450,7 +441,11 @@ COLMAP は右手系、Unity は左手系で、aras-p は PLY の座標を軸反�
 | `min_second_extent_m` | 0.40 m | 第 2 主成分方向の広がり（**一直線に歩いただけを弾く**）|
 | `expected_scale` | 未設定 | シーン既知スケール。**通常は使わない**（下記）|
 
-> **Quest 側のゲートはこれより厳しい**（`minInlierRatio` 0.5 / `maxRmseM` 0.05 m）。PC 側は「明らかにおかしい解」を落とすだけで、正しさの判定は Quest 側の連続一致（§7-3）が担う。両者の一覧は `ImplementationSpec.md` §10。
+> **品質のしきい値はこの表（PC 側 cv.json）が単一の真実で、Quest 側は複製を持たない。** PC 側は「明らかにおかしい解」を落とすだけで、正しさの判定は Quest 側の連続一致（§7-3）が担う。Quest が見るのは健全性（NaN/Inf/\|s\|=0）と改悪防止と連続一致だけ。一覧は `ImplementationSpec.md` §10。
+>
+> 以前は Quest 側が PC より厳しい複製（`maxRmseM` 0.05 < PC 0.08 など）を持っていて、PC が承認した解を黙って握り潰していた。しかもシーンにシリアライズされるため再ビルドしないと直せなかった（`ImplementationSpec.md` §5.5）。
+
+> **新しいシーンで一度もロックしないときは、まず `cv_heartbeat.json` の `solve_why` を見る。** 局所化も Sim(3) も良好なのに公開されていない場合、理由はここに文字列で出ている（bld2 では `|scale| 4.523 outside [0.5, 2.0]` が 16 セッション続いていた）。
 
 ### 7-2b. 精度は「どれだけ部屋を歩いたか」でほぼ決まる
 
@@ -589,7 +584,7 @@ PC の画面を見たいときは外さずに一旦置く（外すとスリー�
 | `Rejected: <理由>`（琥珀） | PC は解いているが公開ゲートで落としている | 理由がそのまま出る（rmse 超過 / インライア率 / 配置）。§7-2 の閾値を見直す |
 | `accepted 3 · match 1/2 (25 cm apart)` | 解は届いているが、独立な解が一致しない | 歩き方が足りない。部屋を大きく回る（§7-2b）|
 
-WSL2 のターミナルにも同じ理由が数値付きで出ます:
+`run.py` のコンソール（`[cv]` の行・`<out>/cv.log`）にも同じ理由が数値付きで出ます:
 
 ```
 Sim(3) 非公開（ゲート不合格）: rmse=0.0912m(>0.08m) [n=24 inliers=18 rmse=0.0912 scale=-0.958 間隔=2.82 広がり=0.95]
@@ -605,14 +600,20 @@ Sim(3) 非公開（ゲート不合格）: rmse=0.0912m(>0.08m) [n=24 inliers=18 
 |---|---|
 | Real CP を測ったのに準備チェックが `Real CP not set` のまま緑にならない | 測定が**完了していません**。完了は全点を記録したときだけで、途中で A を押して中断すると記録は捨てられます。HUD の `n / 6` が進んでいるかを見てください。進まないなら §8-0（描画例外で止まる既知の不具合・対策済み）。PC の `received/quest_events.jsonl` に `cp_survey_done` があるかで確定します |
 | 試行のたびに同じような向きにずれる／HUD が `Trial discarded` | Quest の原点が動いている（§7-5）。ヘッドセットを外さない・再センタリングしない。過去データは `python analysis/check_tracking.py received/session_*` で判定 |
-| WSL2 で `Command 'python' not found` | venv 有効化を忘れている。`source ~/vptcv/bin/activate`。`.venv/Scripts/` は Windows 用で WSL2 では使えない |
+| `[cv] CV を自動起動できません: WSL がインストールされていません` / `CV 環境（~/vptcv）がありません` | セットアップ未了。`setup_windows.bat` を実行（§4-3） |
+| `[cv] localize が起動直後に 3 回続けて終了しました` | 設定の問題。`<out>/cv.log` の最後の `Traceback` を見る。多くは `setup_windows.bat` の再実行で直る |
+| `[cv] … CUDA: NOT available` | GPU が使われていない（とても遅い）。Windows に NVIDIA の最新ドライバを入れ、`setup_windows.bat` を再実行（CUDA 版 torch に入れ替わる） |
+| `[cv] 別の localize がこのフォルダを処理中のため、起動を待ちます` | 手で起動した `localize` が動いている。そのまま使われる（止めれば自動で引き継ぐ） |
+| `setup_windows.bat` が `sudo` のパスワードで止まる | Ubuntu のユーザーを作ったときのパスワードを入れる（入力中は表示されない）。忘れたら Windows のコマンドプロンプトで `wsl -d Ubuntu-24.04 -u root passwd <ユーザー名>` |
+| WSL2 で `Command 'python' not found` | 手で動かすときに venv の有効化を忘れている。`source ~/vptcv/bin/activate`。`.venv/Scripts/` は Windows 用で WSL2 では使えない |
 | WSL2 で `pip install` が `externally-managed-environment` | システム Python を触っている。上の venv を有効化してから入れる |
-| WSL2 で `hloc/pycolmap が必要` | CV 依存未導入 or 環境違い。§4-3 を実行 |
-| `scene を解決できません` | `run.py` を先に起動（cv.json 生成）するか、`--scene scene_data/<name>` を付ける |
-| `DB 特徴が無い`（Assertion） | §4-4 の `hloc_db` を未実行。該当シーンで実行 |
+| WSL2 で `hloc/pycolmap が必要` | CV 依存未導入 or 環境違い。`setup_windows.bat` を実行（WSL2 で直接なら `python -m vptserver.cv.check_env` で確認） |
+| `scene を解決できません` | `--scene scene_data/<name>` を付けて起動するか、GUI でシーンを選ぶ |
+| `DB 特徴が無い`（Assertion） | §4-4 の DB 構築を未実行。`build_scene_db.bat` |
 | Quest で 3DGS が見えない | Vulkan / Multi-Pass / `GaussianSplatURPFeature` を **両** Renderer に付与、を確認 |
 | HUD が `✕ Server` | `run.py` が動いていない / 到達しない。診断行に IP が出ていて `no reply` / `silent 12s` なら run.py 側の問題、`no server (no beacon / no manual IP)` ならネットワーク（§6）|
-| HUD が `● Server` だが `✕ CV` | WSL2 の `localize` が未起動か落ちている。起動し直す。このまま試行を始めても必ずタイムアウトする |
+| HUD が `● Server` だが `✕ CV` | CV（`localize`）が起動していないか落ちている。`run.py` のコンソールの `[cv]` の行を見る（落ちても 5 秒後に自動で起動し直す）。このまま試行を始めても必ずタイムアウトする |
+| HUD が `✕ Server` のまま・PC の受信枚数が 0 | ファイアウォール（特にネットワークが「パブリック」）。`setup_windows.bat` を再実行（§6） |
 | パススルー映像の板が視界を塞ぐ | デバッグ用の `[BuildingBlock] Passthrough Camera Visualizer`。既定では `y = −100 m` に退避してある。誰かが原点へ戻した状態なので、Inspector で `Position.y` を −100 に戻す（使いたいときだけ 0 に）|
 | Quest の送信数は増えるが PC 受信枚数が増えない | UDP が届いていない。§6 のネットワーク切り分けへ（診断行で両方の数を比較できる）|
 | 大学 WiFi で通信できない | §6。まず `ping`、その後 Manual IP か私設 LAN |
@@ -649,7 +650,7 @@ Sim(3) 非公開（ゲート不合格）: rmse=0.0912m(>0.08m) [n=24 inliers=18 
 
 | 前提 | なぜ必要か | 確認方法 |
 |---|---|---|
-| **サーバと CV の両方が応答** | `run.py` だけ起動して WSL2 の `localize` を忘れると、キーフレームは届くのに Sim(3) が返らず全試行がタイムアウトする | HUD の `● Server 3ms  ● CV`（→ §6-1）|
+| **サーバと CV の両方が応答** | CV（WSL2 の `localize`）が動いていないと、キーフレームは届くのに Sim(3) が返らず全試行がタイムアウトする（`start_experiment.bat` なら自動で起動するが、起動に失敗していることがある） | HUD の `● Server 3ms  ● CV`（→ §6-1）|
 | **コントローラ先端の校正（毎セッション）** | Unity が返すのは本体内部の追跡原点で、実際に物へ当てる先端ではない。差は数 cm あり、測りたい量と同じオーダー。未校正だと系統誤差が丸ごと乗る。**前回の保存値は今の物理構成に対応している保証がない**ので、毎回やり直す | HUD が `✓ Tip 2.1mm`（緑）。`▲ Tip old`（琥珀）は未検証状態で、このままでは Real CP を測れない |
 | **Virtual CP が実物の特徴点に合っている** | ダミー座標のままだと何も測っていない | Editor の Control Points ウィンドウが仮座標を検出すると赤い警告を出す |
 | **Real CP を測定済み（毎セッション）** | これが無いと、集めたデータから誤差を計算できない | HUD の準備チェックが `Real CP 6`（緑）。`Real CP not set` なら A で測る |
@@ -825,7 +826,7 @@ Editor でのマウス配置は**視線方向の奥行きに歯止めが無い**
 
 ### 9-2. 試行の回し方（10 試行）
 
-1. §5 の通り `run.py` と `localize` を起動しておく（**試行ごとの再起動は不要**）。
+1. §5 の通り `start_experiment.bat` で起動しておく（`run.py` と `localize` が両方動く。**試行ごとの再起動は不要**）。
 2. 9-1 の準備を済ませ、HUD が**青**（試行を開始できます）になっているのを確認。
    琥珀なら指示文に不足項目が出る（`Set the Real CPs once — [A]` など）。
 3. **B ボタン**（または HUD の `Start trial`）を押す。内部では次が一括で走る:
@@ -967,7 +968,101 @@ Real CP の測定は 1 回きりで**全試行が道連れになる**ので、�
 
 ---
 
-## 10. ライセンス / クレジット
+## 10. デモ展示の運用
+
+> **要点**: 前日に PC で 1 回位置合わせして保存すれば、**当日は PC 無しで**電源を入れてアプリを起動し、**両スティックを 3 秒押し込んでデモに入り**、見回すだけで 3DGS が重なる。見つからないときだけ PC で約 1 分の再位置合わせ。
+> 設計の理由は `Specification.md` §15、実装の契約は `ImplementationSpec.md` §14。
+
+### 10-1. アプリとデモへの入り方
+
+- **実験と同じアプリ**（1 つの APK）。通常どおりビルドしてインストールする（Scene List に `GSTestScene` と `DemoScene` の両方が入っていること）。**更新は必ず `adb install -r`（上書き）で入れる。アンインストールすると保存した位置合わせ（JSON とアンカー）が消える。**
+- アプリは実験の画面（`Setup required`）で起動する。**左右のスティックを同時に 3 秒押し込み続ける**とデモへ切り替わる（HUD の `Demo mode [both sticks hold]` でも可）。**CP の設定も先端校正も要らない。**
+- 実験へ戻るときは、デモのスタッフパネル（§10-6）を開いて同じく両スティックを 3 秒。デモの保存はそのまま残り、次にデモへ入ったときに復元される（実験の試行を回しても消えない。保存ファイル名が別）。
+- 切り替えられないとき: 実験の試行・Real CP の測定・Virtual CP の編集・先端校正の途中、または測った記録がまだ PC に届いていないとき（HUD のボタンが淡色になる）。
+- **アプリを再起動すると実験の画面から始まる**。展示中にアプリが落ちたら、もう一度両スティックを 3 秒押してデモに入る。
+
+> **会場が 3DGS を撮った部屋でない場合**（学会会場など）は、事前に会場を撮影し、COLMAP → 3DGS → 再ローカライズ DB（§4-4）まで作っておく必要がある。
+
+### 10-2. 初回（前日）: 位置合わせして保存する
+
+1. PC で **`server\start_demo.bat` をダブルクリック**する。CV（WSL2 の `localize`）も自動で起動する。デモのセッションは実験と別のフォルダ（`received_demo/`）に入る（`check_tracking.py` などの解析が全セッションを走査するので、混ざると誤検出の元になる）。コンソールに `[cv] … watch 開始` と出れば準備完了。
+   - 手で動かすなら `run.py --out received_demo --no-cv` と、WSL2 で `python -m vptserver.cv.localize --watch received_demo`（**`--out` と `--watch` を必ず同じにする**）。
+2. アプリを起動し、**両スティックを 3 秒押し込んでデモに入る**。保存が無いので来場者向けに `Please ask a staff member` が出る。
+3. **Y（左）と B（右）を同時に 3 秒押し続ける** → スタッフパネルが開く（振動で分かる）。開き方は画面の案内の 3 行目（`Staff: hold Y + B together for 3 s …`）にも出ている。押している間は `Opening the staff panel… 1.5 / 3 s` と残り時間が出る（途中で離すと 0 からやり直し）。
+4. **A** で `Re-align`。PC が見えていないとボタンが淡色になり、理由（`PC server not running` など）が出る。
+5. **部屋を大きく回るように歩く**（§7-2b と同じ。直線や立ち止まりでは確定しない）。流れは「集める → 待つ → 足りなければ少し足す」:
+   - **集める**: 画面に `Keyframes 12 / 24` と進み具合が出る（PC が採用した枚数）。24 枚に達するか 60 秒（送信していた時間）たつと**送信が止まり、振動する**。歩き方がまずいと指示が変わる（`Walk farther — cover more of the room` / `Walk a curved path, not a straight line` / `Few keyframes recognized — check the lighting …`）。
+   - PC の処理が追いつかないと `PC is catching up — keep walking slowly`（進み具合の欄に `paused, PC queue 4`）と出て送信が一時停止し、追いつくと自動で再開する。この間も歩き続けてよい。
+   - 直前の再位置合わせの処理が PC に残っていると、最初に `Waiting for the PC to finish earlier work…` と出る。PC が片付け終われば自動で進む。
+   - **PC が遅くても、処理が進んでいる限り打ち切られない**（時間がかかるだけ）。待機中は `PC processed 27 / 30 … · 45 s` と PC の進み具合が出る。急ぐときは **A** で取り消せる。
+   - **待つ**: `Computing the alignment` と出る。歩くのをやめてよい。PC が処理し終えるまで数秒〜十数秒。
+   - **確定**すると 3DGS がフェードインして `Saved with 3 anchors …` と出る（集めている途中で確定することもある）。
+   - **確定しなければ**振動して `Walk a bit more (1/3)` と出るので、まだ歩いていない場所を 6 枚ぶん歩く。3 回足しても駄目なら `Could not align: <理由>` と出て止まる（§10-5）。
+6. **X** で表示を切り替え、実物と重なっているか目で確かめる。ずれていれば **A** でもう一度 `Re-align`（古い保存は、新しい保存ができるまで消えない）。
+7. **Y＋B 3 秒**でスタッフパネルを閉じる。
+
+### 10-3. 当日: 電源を入れて起動するだけ
+
+1. 電源を入れる。**境界（ガーディアン）の設定を求められたら、新しく作らず既存のものを使う。** 作り直したり境界の履歴を消したりすると、保存したアンカーが見つからなくなる可能性が高い（実機で要確認）。
+2. アプリを起動し、**両スティックを 3 秒押し込んでデモに入る**。数秒で 3DGS がフェードインすれば完了（3 秒たっても見つからなければ `Look around the room` と出るので、部屋を見回す）。
+3. **トラッキング原点（座標の原点）は電源を入れ直すたびに変わるが、気にしなくてよい**。保存は空間アンカー基準なので、原点がどこにあっても正しい位置に戻る。
+
+### 10-4. 展示中
+
+- 来場者が押せるのは **X（表示の切り替え）だけ**。他のボタンやグリップは何も起こさない（誤操作で位置合わせが崩れない）。
+- ヘッドセットを外す・スリープする・Meta ボタンで再センタリングする → 自動で確かめ直す。アンカーで確かめられれば表示を続け、できなければ一旦消して `Look around the room` を出す。
+- 次の来場者がかぶったとき、前の来場者が X で消していても、確かめてから表示し直す。
+- スタッフパネルはヘッドセットを外すと自動で閉じる（開いたまま次の来場者に渡さない）。
+- スタッフパネルの開き方（Y＋B 3 秒）が画面に出るのは、デモに入った直後の 10 秒・`Please ask a staff member` のとき・再位置合わせ中・見つからない状態が長引いたときだけ。**来場者が見ている表示中は出ない**（来場者に開き方を覚えさせないため）。表示中に開きたいときも、操作そのものは同じ Y＋B 3 秒。
+- 一度保存できていれば **PC は不要**。落としてよい。
+
+### 10-5. 見つからないとき（スタッフパネルの表示と対処）
+
+| 表示 | 意味 | 対処 |
+|---|---|---|
+| `No saved alignment` | 保存が無い（初回・消去後） | §10-2 で位置合わせする |
+| `Saved alignment is for a different 3DGS model` | 保存後に 3DGS アセットを差し替えた | 位置合わせし直す（古い姿勢を黙って当てないために復元しない） |
+| `Saved anchors not found on this headset (boundary reset?)` | 端末にアンカーが無い。境界のリセットやアプリのアンインストールで消えた | 位置合わせし直す |
+| `Room not recognized yet — look around, check the lighting` | アンカーはあるが、部屋をまだ認識できていない | 部屋を見回す。照明を撮影時に近づける。30 秒たっても駄目なら位置合わせし直す（裏では探し続けるので、後から見つかれば自動で表示される） |
+| `Found 1 of 2 anchors needed — look around` | 一部しか見つかっていない | 部屋を歩いて見回す |
+| `Anchors disagree by 12 cm` | 見つかったアンカーどうしの示す位置が食い違う | 位置合わせし直す。急ぐなら **B**（`Show anyway`）で一致の確認なしに表示し、X で目で確かめる（パネルに `unverified` と出続ける） |
+| `Not saved — will be lost after a restart` | 保存に失敗した（その場の表示は正しい） | 再起動するまでは使える。時間のあるときに位置合わせし直す |
+| `Could not align: the PC rejected the solution: not enough movement …` | 再位置合わせで、歩いた範囲が狭かった | 部屋の端から端まで、大きく回るように歩いて **A** で再試行 |
+| `Could not align: … path too straight …` | 一直線に歩いた | 曲がりながら（弧を描いて）歩いて再試行 |
+| `Could not align: the PC recognized only N of M keyframes` | 画像が照合できていない | 照明を撮影時に近づける。模様の無い壁ばかり見ない。PC のシーン（`--scene`）が合っているか確かめる |
+| `Could not align: the solutions did not agree …` | 解が安定しなかった | より大きく部屋を回って再試行 |
+| `Could not align: the PC server stopped responding (run.py)` / `the CV worker stopped (localize)` | 途中で `run.py` / `localize` が終了した（落ちた） | `start_demo.bat` のウインドウ（`[cv]` の行・`received_demo/cv.log`）を確かめる。`localize` は自動で起動し直すので、少し待って再試行。`run.py` が落ちていれば `start_demo.bat` で起動し直す |
+| `Could not align: the CV worker is not running for this folder …` | `localize` が起動していない、または `run.py` と別のフォルダを見ている | `start_demo.bat` で起動する（`--watch` が自動で合う）。手で動かしているなら `run.py --out X` と `localize --watch X` を同じにし、**最新の `localize` に入れ替える**（古い版だと前の処理の片付け中を見分けられない） |
+| `Could not align: the CV worker is not processing this session …` | `localize` は動いているが、このセッションのキーフレームを処理していない | 同上（手で動かしたときの `--out` と `--watch` の食い違いが典型） |
+| `Could not align: the PC seems stuck …` | 15 分間 1 枚も処理が終わらない | `start_demo.bat` のウインドウを閉じて起動し直す（`localize` も起動し直る）。下の「PC が遅い」も見る |
+
+**PC が遅いだけなら失敗しない**（処理が進んでいる限り待ち続ける）。ただし位置合わせに何分もかかる。
+
+**PC が遅い（1 枚に何秒もかかる）とき**: `start_demo.bat` のウインドウ（`received_demo/cv.log`）で `[cv]` の `新着 N 枚` の間隔を見る。以前の実験では 60 秒以内に確定していたので、1 枚あたり数秒以上かかっているなら GPU が使われていない可能性が高い。起動時の `[cv] … CUDA:` の行が `NOT available` ならそれが原因で、Windows に NVIDIA の最新ドライバを入れて `setup_windows.bat` を再実行する（CUDA 版の torch に入れ替わる）。WSL2 で直接確かめるなら:
+```bash
+nvidia-smi                                                     # GPU が見えるか
+~/vptcv/bin/python -c "import torch; print(torch.cuda.is_available())"    # True であること
+```
+
+**PC が無いときの最終手段**: **Y** で手動調整（スティックで移動・ヨー、トリガーでスケール、右スティック押込で目の前に呼び寄せ、左スティック押込で水平化＋床スナップ）→ **A** で確定すると保存される。取り消しは **Y**。
+
+### 10-6. スタッフ操作（スタッフパネルを開いている間）
+
+| 入力 | 動作 |
+|---|---|
+| **Y＋B 同時 3 秒** | スタッフパネルの開閉（手動調整中は不可。先に Y か A で終える） |
+| **A** | `Re-align`（PC が必要）／再位置合わせ中は `Cancel`（保存済みの姿勢へ戻る） |
+| **A 長押し 3 秒** | 保存の消去（元に戻せない。パネルのボタンを突いても消えず、長押しを案内するだけ） |
+| **B** | `Show anyway`（見つかっているが一致しないとき） |
+| **Y** | 手動調整の開始／取り消し |
+| **両スティック押込 3 秒** | 実験モードへ戻る（`Back to experiment mode`。再位置合わせ・保存・手動調整の途中は不可） |
+| **X** | 3DGS の表示切り替え（来場者も使える） |
+
+押しても受け付けない操作には、長めの振動が返る。
+
+---
+
+## 11. ライセンス / クレジット
 
 - **本プロジェクト自作部分**（`Assets/Scripts/`, `server/`, 設計文書）は **MIT License**（プロジェクト直下 [`LICENSE`](../LICENSE)）。
 - **3DGS 表示**: [aras-p / UnityGaussianSplatting](https://github.com/aras-p/UnityGaussianSplatting)（`unity/package`、**MIT**, © 2023 Aras Pranckevičius）を**素で同梱**。ライセンス本文 `unity/package/LICENSE.md` および `unity/LICENSE.md` は MIT 遵守のため**保持**（削除しない）。

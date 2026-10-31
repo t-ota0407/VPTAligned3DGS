@@ -311,7 +311,7 @@ class Localizer:
         res = solve_alignment(Cc, Cw, thresh_m=thresh_m)
         return dict(sim3=res, per_kf=used, centers_colmap=Cc, centers_world=Cw)
 
-    def watch(self, base_dir, every=2, min_kf=5, poll=1.0, out_result=None, thresh_m=0.10):
+    def watch(self, base_dir, every=2, min_kf=5, poll=1.0, out_result=None, thresh_m=0.10, stop_event=None):
         """base_dir 配下の「最新 session_* フォルダ」を自動追従して逐次ローカライズし、
         Sim(3) を更新し続ける（run.py がそのフォルダの result_sim3.json を Quest へ返送）。
 
@@ -334,53 +334,41 @@ class Localizer:
         work = self.hloc / "watch_work"       # セッション切替時にセッション別へ差し替える
         # Cc/Cw: 解法バッファ（P2-b でウィンドウ化）／total_ok: 累計採用数（再計算タイミングの基準）
         processed, Cc, Cw, total_ok, last_solved, out_path = set(), [], [], 0, 0, None
+        # done_n: このセッションで処理し終えたキーフレーム数（採否を問わない。解き直しまで済んだ分）。
+        # Quest のデモは「送信を止めてから PC が全部処理し終えたか」をこれで判定する
+        # （busy だけだと「届いたがまだ処理を始めていない」瞬間を「終わった」と取り違える）。
+        done_n = 0
         cv_mtime = None
         gate_cfg = {}                    # cv.json 由来の品質ゲート設定（P1・欠損は既定）
         window = 24                      # P2-b: 直近 N 件のみで解く（0=無制限）。cv.json で上書き
-        last_hb = 0.0                    # ハートビート最終書き込み時刻
 
         last_solve = {}                  # 直近の解の統計と採否理由（Quest まで届ける）
 
-        busy = {}                        # 処理中かどうか（Quest 側の「待機中」表示に使う）
-
-        def write_heartbeat(session_dir, n_window, n_total):
-            """自分が生きていることをセッションフォルダに書く（run.py が読んで Quest へ伝える）。
-
-            run.py だけ動いていて WSL2 の CV が未起動、という状態は外から見分けがつかない。
-            キーフレームは届いて保存されるのに Sim(3) が永遠に返らないので、実験者は
-            「位置合わせが失敗した」と誤解したまま試行を消費してしまう。これを実験前に検出する。
-            /mnt/c は遅いので 2 秒に 1 回までに抑える。
-            """
-            import json as _json
-            import os as _os
-            try:
-                p = Path(session_dir) / "cv_heartbeat.json"
-                tmp = str(p) + ".tmp"
-                d = {"t": time.time(), "pid": _os.getpid(),
-                     "scene": self.scene_str, "window": n_window,
-                     "total_ok": n_total}
-                # 直近の解の採否理由も載せる。これが無いと「なぜロックしないか」が
-                # WSL2 のターミナルにしか出ず、実機側からは原因が分からない。
-                d.update(last_solve)
-                # 処理中フラグ。hloc の1バッチは数秒かかり、その間ハートビートを
-                # 更新できない。これが無いと Quest 側は「CV 停止」と誤表示してしまう。
-                d.update(busy)
-                with open(tmp, "w", encoding="utf-8") as f:
-                    _json.dump(d, f, ensure_ascii=False)
-                _os.replace(tmp, p)
-            except Exception:
-                pass          # ハートビートは補助情報。失敗しても本体は止めない
+        # 生存信号（ハートビート）は別スレッドが 2 秒ごとに書く（→ heartbeat.py）。
+        # run.py だけ動いていて WSL2 の CV が未起動、という状態は外から見分けがつかない。
+        # キーフレームは届いて保存されるのに Sim(3) が永遠に返らないので、これを Quest に伝える。
+        # **hloc の処理中もスレッドが書き続ける**ので、生存信号の鮮度は PC の速さに依存しない
+        # （メインループからしか書かなかった頃は、遅い PC で正常な処理中を「停止」と誤判定された）。
+        from .heartbeat import Heartbeat
+        import threading
+        stop = stop_event if stop_event is not None else threading.Event()   # 起動元が終わったら立つ（lifecycle.py）
+        hb = Heartbeat(base, self.scene_str)
+        hb.start()
         log.info("watch 開始: base=%s every=%d min=%d window=%d（最新 session_* を自動追従・cv.json を即時反映）",
                  base, every, min_kf, window)
         try:
-            while True:
+            while not stop.is_set():
                 act = active_session()
                 if act != cur:                   # セッション切替（または初回）→ リセット
                     cur = act
                     processed, Cc, Cw, total_ok, last_solved = set(), [], [], 0, 0
+                    done_n = 0
                     out_path = Path(out_result) if out_result else (cur / "result_sim3.json")
                     cv_mtime = None              # 新セッションの cv.json を読み直す
-                    last_hb = 0.0                # 新セッションへ即ハートビートを書く
+                    # 新セッションへ即ハートビートを書く（前のセッションの進み具合は持ち越さない）
+                    hb.reset_session(cur)
+                    hb.update(busy=False, busy_n=0, window=0, total_ok=0, done=0)
+                    hb.write_now()
                     # **作業ディレクトリはセッションごとに分ける。**
                     # キーフレームは試行ごとに req_000001 から振り直されるため、共有ディレクトリだと
                     # hloc が「その名前は抽出済み」と判断して前セッションの画像特徴を使い回す。
@@ -406,7 +394,9 @@ class Localizer:
                             if ns and ns != self.scene_str:     # scene 変更 → DB 再ロード＆蓄積リセット
                                 log.info("scene 変更 → 再ロード: %s", ns)
                                 self.load_scene(ns)
+                                hb.set_scene(self.scene_str)
                                 processed, Cc, Cw, total_ok, last_solved = set(), [], [], 0, 0
+                                done_n = 0
                             if (ne, nm, nwin) != (every, min_kf, window):
                                 log.info("設定更新(cv.json): every %d→%d, min %d→%d, window %d→%d",
                                          every, ne, min_kf, nm, window, nwin)
@@ -445,13 +435,12 @@ class Localizer:
                     meta_of[nm] = meta
 
                 if names:
-                    # 処理に入る直前に「busy」を書いておく。hloc は数秒ブロックするので、
-                    # ここで書かないと Quest 側からは沈黙＝停止に見える。
-                    busy = {"busy": True, "busy_n": len(names)}
-                    write_heartbeat(cur, len(Cc), total_ok)
-                    last_hb = time.time()
+                    # 処理に入る直前に「busy」を立ててすぐ書く。hloc は数秒〜数分ブロックするが、
+                    # その間もハートビートのスレッドが busy=True のまま書き続ける。
+                    # busy は解き直しが終わって処理済み枚数を更新するまで下ろさない（下）。
+                    hb.update(busy=True, busy_n=len(names))
+                    hb.write_now()
                     est = self.localize(cur, names, intr, work)
-                    busy = {"busy": False, "busy_n": 0}
                     ok, rej = 0, 0
                     for nm in names:
                         rec = est.get(nm)
@@ -476,7 +465,14 @@ class Localizer:
                     log.info("[%s] 新着 %d 枚（採用 %d 棄却 %d）／累計 %d 窓 %d",
                              cur.name, len(names), ok, rej, total_ok, len(Cc))
 
+                # 処理済み枚数（画像が欠けて読めなかった分も数える。二度と処理されないので、待ち続けないように）。
+                # ハートビートへ渡すのは**解き直しの後**（下）。ハートビートは別スレッドが 2 秒ごとに書くので、
+                # ここで渡すと「処理済み」が先に Quest へ届き、結果がまだ無いのに「処理し終えた」と判定される。
+                done_n += len(todo)
+                solved_now = False
+
                 if len(Cc) >= min_kf and (total_ok - last_solved) >= every:
+                    solved_now = True
                     last_solved = total_ok
                     hand = gate_cfg.get("handedness", -1)
                     res = solve_alignment(Cc, Cw, thresh_m=thresh_m,
@@ -515,17 +511,21 @@ class Localizer:
                                     "[n=%d inliers=%d rmse=%.4f scale=%+.3f 間隔=%.2f 広がり=%.2f]",
                                     why, len(Cc), nin, res["rmse_m"], res["sigma"],
                                     res["cond"]["baseline"], res["cond"]["extent2"])
-                    write_heartbeat(cur, len(Cc), total_ok)   # 採否を即座に反映
-                    last_hb = time.time()
 
-                now = time.time()
-                if now - last_hb >= 2.0:
-                    last_hb = now
-                    write_heartbeat(cur, len(Cc), total_ok)
+                # 進み具合をハートビートへ（結果ファイルを書いた後なので、Quest が done を見た時点で
+                # 解き直しも済んでいる）。直近の解の採否理由も載せる — これが無いと「なぜロックしないか」が
+                # WSL2 のターミナルにしか出ず、実機側からは原因が分からない。
+                hb.update(busy=False, busy_n=0, window=len(Cc), total_ok=total_ok, done=done_n,
+                          **last_solve)
+                if names or solved_now:
+                    hb.write_now()       # 採否・処理済みを即座に反映（定期書き込みを待たない）
 
-                time.sleep(poll)
+                stop.wait(poll)          # time.sleep の代わり（起動元が終わればすぐ抜ける）
+            log.info("watch 終了")
         except KeyboardInterrupt:
             log.info("watch 終了")
+        finally:
+            hb.stop()
 
 
 def tail_residual_m(res, Cc, Cw, tail_n=4):
@@ -643,7 +643,20 @@ def main():
     ap.add_argument("--fresh", action="store_true", help="（互換用・無視）")
     ap.add_argument("--out-result", default=None,
                     help="Sim(3) の書き出し先（既定: 対象フォルダの result_sim3.json）")
+    ap.add_argument("--exit-on-stdin-eof", action="store_true",
+                    help="標準入力が閉じたら終了する（Windows の run.py が自動起動するときに付ける。"
+                         "run.py が終わると localize も終わる。→ lifecycle.py）")
     args = ap.parse_args()
+
+    import os
+    import threading
+    stop_event = threading.Event()
+    if args.exit_on_stdin_eof:
+        from .lifecycle import exit_when_parent_gone
+        exit_when_parent_gone(stop_event, log)
+    # run.py（cv_launcher）が終了時にこのプロセスを確実に止められるよう、PID を最初に出す
+    log.info("pid=%d", os.getpid())
+    log_compute_device()
 
     # シーン解決: --scene > 最新セッションの cv.json（run.py が書く）> scene_data 自動検出
     scene = args.scene or read_active_cv_config(args.watch).get("scene") or autodetect_scene()
@@ -669,7 +682,25 @@ def main():
             log.info("結果を書き出し: %s （run.py が検出して Quest へ返送）", op)
     else:
         # 既定: 運用モード（received を監視）
-        loc.watch(args.watch, every=args.every, min_kf=args.min_kf, out_result=args.out_result)
+        loc.watch(args.watch, every=args.every, min_kf=args.min_kf, out_result=args.out_result,
+                  stop_event=stop_event)
+
+
+def log_compute_device():
+    """CV が GPU で動くかを起動時に出す。CPU だと 1 枚に十数秒以上かかり、位置合わせに何分もかかる。
+
+    初めての環境では「動くが遅い」が最も気づきにくい失敗なので、起動した瞬間に分かるようにする。
+    """
+    try:
+        import torch
+        if torch.cuda.is_available():
+            log.info("CUDA: available (%s, torch %s, CUDA %s)",
+                     torch.cuda.get_device_name(0), torch.__version__, torch.version.cuda)
+        else:
+            log.warning("CUDA: NOT available — CV は CPU で動きます（1 枚に十数秒以上かかります）。"
+                        "Windows の NVIDIA ドライバと、CUDA 版 torch（server/setup_wsl.sh）を確認してください")
+    except Exception as e:
+        log.warning("torch を確認できません（CV 環境が不完全です。server/setup_wsl.sh を実行してください）: %s", e)
 
 
 if __name__ == "__main__":

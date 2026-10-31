@@ -1023,10 +1023,6 @@ MonoBehaviour:
   scaleRate: 0.5
   stickDeadzone: 0.15
   floorY: 0
-  maxRmseM: 0.05
-  minInlierRatio: 0.5
-  minScaleAbs: 0.5
-  maxScaleAbs: 2
   rmseWorsenFactor: 1.5
   minConsecutiveAgreements: 2
   agreeMaxSceneShiftM: 0.15
@@ -1972,7 +1968,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: c12d929a7f62c48adbe9ff45c9a33ff0, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  m_Asset: {fileID: 11400000, guid: 112f185c38b02e74ea8e5e9491326edd, type: 2}
+  m_Asset: {fileID: 11400000, guid: 7dc7f862898597c4d8bd0ce5bc7c2118, type: 2}
   m_RenderOrder: 0
   m_SplatScale: 1
   m_OpacityScale: 1

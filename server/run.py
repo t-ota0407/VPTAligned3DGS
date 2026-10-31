@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import socket
+import sys
 import threading
 import time
 from collections import deque
@@ -40,20 +41,40 @@ CV_BUSY_STALE_S = 90.0
 RESET_DEDUP_S = 5.0
 
 
-def read_cv_status(session_dir):
+def heartbeat_age(path, d=None):
+    """生存信号の古さ[s]。**ファイルの更新時刻（Windows の時計）で測る。**
+
+    中の "t" は WSL の時計で書かれる。WSL2 はスリープ復帰後などに Windows と時計がずれることがあり
+    （数十秒〜分。ノート PC で起きやすい既知の不具合）、"t" で測ると生きている CV を「停止」と誤判定する。
+    /mnt/c のファイルは Windows 側が書くので、更新時刻は Windows の時計になる。
+    更新時刻が取れないときだけ "t" を使う。
+    """
+    try:
+        return max(0.0, time.time() - os.stat(path).st_mtime)
+    except OSError:
+        return max(0.0, time.time() - float((d or {}).get("t", 0)))
+
+
+def read_cv_status(session_dir, base_dir=None):
     """WSL2 の CV ワーカ（localize.watch）が生きているかを、セッションフォルダの
     cv_heartbeat.json の鮮度で判定する。
 
     run.py だけ起動していて CV が未起動だと、キーフレームは保存されるのに Sim(3) が
     永遠に返らない。外からは「位置合わせが失敗している」ようにしか見えず、実験者は
     原因に気づかないまま試行を消費する。これを Quest 側へ伝えて事前に止められるようにする。
+
+    **セッションにまだハートビートが無いとき**（Quest の RESET 直後）は、CV が前のセッションの
+    処理を終えていないだけのことがある（CV は処理を終えるまで次のセッションへ移れない）。
+    そのときは base_dir の cv_heartbeat.json（CV が今どのセッションを処理しているか・生きているか）を見て、
+    `cv_on` にそのセッション名を入れて返す。**枚数（cv_ok / cv_done 等）は返さない** —
+    前のセッションの枚数を、新しいセッションのものと取り違えさせないため（→ heartbeat.py）。
     """
     try:
         p = Path(session_dir) / "cv_heartbeat.json"
         if not p.exists():
-            return {"cv_alive": False, "cv_age": -1.0}
+            return _read_base_cv_status(base_dir, session_dir)
         d = json.loads(p.read_text(encoding="utf-8"))
-        age = max(0.0, time.time() - float(d.get("t", 0)))
+        age = heartbeat_age(p, d)
         # 処理中は hloc が数秒〜十数秒ブロックしてハートビートを更新できない。
         # busy が立っていれば「動いてはいる」と分かるので、失効までの猶予を延ばす。
         busy = bool(d.get("busy", False))
@@ -64,6 +85,9 @@ def read_cv_status(session_dir):
             "cv_scene": d.get("scene"),
             "cv_window": d.get("window"),
             "cv_ok": int(d.get("total_ok", 0)),
+            # 処理し終えた枚数（採否を問わず、解き直しまで済んだ分）。Quest のデモが
+            # 「送信を止めてから PC が全部処理し終えたか」を kf と比べて判定する。
+            "cv_done": int(d.get("done", 0)),
             "cv_busy": busy,
             "cv_busy_n": int(d.get("busy_n", 0)),
         }
@@ -75,6 +99,32 @@ def read_cv_status(session_dir):
         return out
     except Exception:
         return {"cv_alive": False, "cv_age": -1.0}
+
+
+def _read_base_cv_status(base_dir, session_dir):
+    """セッションにハートビートが無いときの代わり。CV が生きていて別のセッションを処理中なら
+    `cv_on` にそのセッション名を入れて返す。ベースにも無ければ「ハートビート無し」（cv_age=-1）。"""
+    none = {"cv_alive": False, "cv_age": -1.0}
+    if base_dir is None:
+        return none
+    try:
+        bp = Path(base_dir) / "cv_heartbeat.json"
+        if not bp.exists() or bp.resolve() == (Path(session_dir) / "cv_heartbeat.json").resolve():
+            return none
+        d = json.loads(bp.read_text(encoding="utf-8"))
+        age = heartbeat_age(bp, d)
+        busy = bool(d.get("busy", False))
+        stale = CV_BUSY_STALE_S if busy else CV_STALE_S
+        return {
+            "cv_alive": age <= stale,
+            "cv_age": round(age, 1),
+            "cv_scene": d.get("scene"),
+            "cv_busy": busy,
+            "cv_busy_n": int(d.get("busy_n", 0)),
+            "cv_on": str(d.get("session") or ""),   # CV が今処理しているセッション（＝このセッションではない）
+        }
+    except Exception:
+        return none
 
 
 def build_pong_payload(seq, session, kf_count, cv_status, ev_ack=0, ev_n=0):
@@ -420,6 +470,11 @@ class SessionManager:
             return self._dir
 
     @property
+    def base(self):
+        """セッションフォルダの親（--out）。CV のベースのハートビートがここに置かれる。"""
+        return self._out_base
+
+    @property
     def result_file(self):
         return Path(self.dir) / "result_sim3.json"
 
@@ -566,7 +621,7 @@ def udp_loop(rx: UdpReceiver, asm: Reassembler, sessions: SessionManager, result
                 try:
                     payload = build_pong_payload(
                         p.req, STATE.session, STATE.keyframe_count,
-                        read_cv_status(sessions.dir),
+                        read_cv_status(sessions.dir, sessions.base),
                         ev_ack=(events.ack if events else 0),
                         ev_n=(events.count if events else 0))
                     addr = rx.last_addr
@@ -643,7 +698,25 @@ def write_cv_config(cv_path, cfg):
     os.replace(tmp, cv_path)
 
 
+def _prepare_process():
+    """どこから起動しても同じに動くようにする（初めての環境・ダブルクリック起動のため）。
+
+    - 作業ディレクトリを server/ にする。scene_data/ や --out（received 等）は server/ 基準で解決される
+      （リポジトリ直下から `python server\\run.py` と起動しても、シーンが見つからない事故にならない）。
+    - 標準出力・標準エラーで表示できない文字を「?」に置き換える。日本語のログを、コード ページの違う
+      コンソールやリダイレクト先へ出しても UnicodeEncodeError で落ちないように。
+    - 1 行ごとに書き出す。ファイルへリダイレクトしたとき、強制終了で直前のログが消えないように。
+    """
+    os.chdir(Path(__file__).resolve().parent)
+    for s in (sys.stdout, sys.stderr):
+        try:
+            s.reconfigure(errors="replace", line_buffering=True)
+        except Exception:
+            pass
+
+
 def main():
+    _prepare_process()
     ap = argparse.ArgumentParser(description="VPTAligned3DGS offload server (Windows UDP + GUI)")
     ap.add_argument("--port", type=int, default=50000, help="キーフレーム受信ポート")
     ap.add_argument("--out", default="received", help="保存先のベースディレクトリ")
@@ -666,6 +739,17 @@ def main():
                 help="このシーンの既知スケール（例 0.96）。指定するとそこから外れた解を棄却する。"
                      "COLMAP の任意単位と実メートルの比は再構成に固有の固定値なので、"
                      "一度分かれば最も安価で強力なゲートになる。未指定なら無効")
+    ap.add_argument("--scale-range", type=float, nargs=2, metavar=("LO", "HI"), default=None,
+                    help="|scale| の健全性レンジ（既定 1e-3〜1e3）。ソルバの発散を落とすだけの"
+                         "シーン非依存チェックなので、通常は触らない。**シーンの実スケール付近に"
+                         "締めないこと** — COLMAP の単位はシーン固有で、締めると正しい解が全滅する")
+    # ↓ WSL2 の CV（localize）の自動起動（→ vptserver/cv_launcher.py）
+    ap.add_argument("--no-cv", action="store_true",
+                    help="WSL2 の localize を自動起動しない（従来どおり WSL2 のターミナルで手動起動する）")
+    ap.add_argument("--wsl-distro", default=None,
+                    help="CV 環境のある WSL ディストリ（省略時: 前回の設定 → CV 環境のあるものを自動で探す）")
+    ap.add_argument("--cv-venv", default=None,
+                    help="WSL 側の CV 環境（venv）の場所（省略時: 前回の設定 → ~/vptcv）")
     args = ap.parse_args()
 
     # セッションフォルダ: 起動ごとに received/session_<timestamp>/ を作り、そこへ保存する。
@@ -679,6 +763,10 @@ def main():
     if args.expected_scale is not None:
         cv_cfg["expected_scale"] = abs(args.expected_scale)
         print(f"[server] 期待スケール {cv_cfg['expected_scale']:.3f} でゲートします")
+    if args.scale_range is not None:
+        lo, hi = sorted(abs(v) for v in args.scale_range)
+        cv_cfg["scale_range"] = [lo, hi]
+        print(f"[server] |scale| の健全性レンジを [{lo:g}, {hi:g}] にします")
 
     def write_cv_for(session_dir):
         """指定セッションの cv.json を現在の設定で書く（新セッション作成時にも呼ばれる）。"""
@@ -692,6 +780,20 @@ def main():
     # セッション別には置かない（再送分が次のセッションへ紛れ込む）。
     events = EventSink(os.path.join(args.out, "quest_events.jsonl"))
 
+    # WSL2 の CV（localize）を自動で起動・終了する（→ vptserver/cv_launcher.py）。
+    # localize は起動時にシーンが決まっていないと終了するので、シーンが決まってから起動する
+    # （複数のシーンがあって未指定なら、GUI でシーンを選んだ時点で起動する）。
+    cv = None
+    if not args.no_cv:
+        from vptserver.cv_launcher import CvLauncher
+        cv = CvLauncher(Path.cwd(), args.out, distro=args.wsl_distro, venv=args.cv_venv,
+                        emit=print, on_event=STATE.event)
+
+    def start_cv_if_ready():
+        if cv is None or cv_cfg.get("scene") is None:
+            return
+        cv.start()
+
     def update_cv(cfg):
         cv_cfg.update({"scene": cfg.get("scene"),
                        "every": int(cfg.get("every", cv_cfg["every"])),
@@ -700,9 +802,19 @@ def main():
             cv_cfg["expected_scale"] = abs(float(cfg["expected_scale"]))
         write_cv_for(sessions.dir)
         STATE.event(f"cv.json 更新: scene={cv_cfg['scene']} every={cv_cfg['every']} min={cv_cfg['min']}")
+        start_cv_if_ready()                 # シーンを選んだ時点で CV を起動（起動済みなら何もしない）
 
     session_dir = sessions.start()          # 最初のセッション作成＋cv.json 書き出し
     print(f"[server] cv.json: {cv_cfg}")
+    if cv is None:
+        print("[server] CV の自動起動は OFF（--no-cv）。WSL2 で localize を手動で起動してください")
+    elif cv_cfg.get("scene") is None:
+        msg = (f"シーンが決まっていないため、CV はまだ起動しません（候補: {', '.join(cv_scenes) or 'なし'}）。"
+               "GUI でシーンを選ぶか、--scene scene_data/<name> を付けて起動してください")
+        print("[server] " + msg)
+        STATE.event(msg)
+    else:
+        start_cv_if_ready()
 
     rx = UdpReceiver(args.port, verbose=args.verbose)
     asm = Reassembler()
@@ -727,6 +839,8 @@ def main():
     print("[server] Quest から RESET(type=4) を受けると新しいセッションへ自動で切り替えます（実験の試行リセット）")
 
     def cleanup():
+        if cv is not None:
+            cv.stop()                       # localize も止める（標準入力を閉じる → 終わらなければ kill）
         if sender is not None:
             sender.stop()
         if beacon is not None:

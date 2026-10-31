@@ -1,0 +1,19 @@
+# CV（WSL2）の動作確認済みの版。setup_wsl.sh が pip の -c（制約）として使う。
+# 確認した環境: Ubuntu 24.04 / Python 3.12 / torch 2.6.0+cu124 / RTX 3070 Ti Laptop（2026-10）
+#
+# 目的: 公開後に依存の新版が出ても、初めての PC で同じ組み合わせを再現できるようにする。
+#   - 直接使う・hloc が使うものだけを固定する（推移的な依存は pip に任せる）。
+#   - torch / torchvision は CUDA の有無で取得先が違うので、ここではなく setup_wsl.sh で固定する。
+#   - hloc（c13273b）と LightGlue（eb42fee）は GitHub のコミットで setup_wsl.sh が固定する。
+#   - numpy 2.4 / scipy 1.18 等は Python 3.11 以上が必要。Python 3.12 以外では setup_wsl.sh は
+#     この制約を使わずに入れる（警告を出す）。
+numpy==2.4.4
+opencv-python==4.13.0.92
+pycolmap==3.13.0
+kornia==0.8.3
+h5py==3.16.0
+scipy==1.18.0
+matplotlib==3.11.0
+plotly==6.8.0
+tqdm==4.68.3
+gdown==6.1.0

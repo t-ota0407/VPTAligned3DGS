@@ -85,6 +85,12 @@ public class ExperimentController : MonoBehaviour
     [SerializeField] private bool experimentInputEnabled = true;
     [Tooltip("A / B（右）を「長押し」と見なす秒数。")]
     [SerializeField] private float aLongPressS = 1.0f;
+    [Tooltip("左右のスティックを同時にこの秒数押し込むと、デモ展示モード（DemoScene）へ切り替える。\n" +
+             "デモは CP の設定も先端校正も要らないので、最初の画面からそのまま入れる。\n" +
+             "この画面ではスティック押込に他の役割が無い（姿勢操作は封じられている）ので衝突しない。")]
+    [SerializeField] private float demoSwitchHoldS = 3f;
+
+    private readonly AppMode.SticksHold _demoHold = new AppMode.SticksHold();
 
     // A / B の短押し／長押し判定。押し始めの時刻と、長押しを既に発火したか。
     private float _aDownT = -1f;
@@ -222,11 +228,16 @@ public class ExperimentController : MonoBehaviour
         if (cpMeasure == null) cpMeasure = FindFirstObjectByType<ControlPointMeasure>();
         if (cpEdit    == null) cpEdit    = FindFirstObjectByType<ControlPointEdit>();
         if (tipCalib  == null) tipCalib  = FindFirstObjectByType<ControllerTipCalibration>();
+
+        // **永続化の停止は Awake で行う（Start では遅い）。** AnchorPersistence は Start で復元を始めるが、
+        // Start どうしの実行順は不定なので、ここが Start だと止める前に復元が走りうる
+        // （GaussianSplatController の不透明度と同じ問題。ImplementationSpec.md §6.3）。
+        // Awake はすべての Start より前に走るので、この順序問題が消える。
+        if (forceExperimentMode && anchors != null) anchors.ExperimentMode = true;
     }
 
     private void Start()
     {
-        if (forceExperimentMode && anchors != null) anchors.ExperimentMode = true;
         if (align != null) align.OnAutoAligned += OnAutoAligned;
 
         // 監視はシーンに置かれていなくても必ず効かせる。無ければ自作する。
@@ -339,8 +350,55 @@ public class ExperimentController : MonoBehaviour
         Debug.Log("[ExperimentController] 姿勢が適用されたので 3DGS を表示しました（目視確認用）");
     }
 
+    // ---------------- デモ展示モードへの切り替え ----------------
+
+    /// <summary>デモへ切り替えられない理由（HUD 用・英語）。切り替えられるなら空。
+    ///
+    /// 作業の途中では切り替えさせない（シーンごと捨てるので、途中の試行・測量・編集・校正が失われる）。
+    ///
+    /// **測り直しの効かない記録が PC へ未送達のときも不可**: Real CP の実測値は測り直すと座標系が変わって
+    /// やり直しが効かず、端末の送信待ち（UDPManager の outbox）はシーンと一緒に消える（端末内の JSONL には残るが、
+    /// `adb pull` しないと PC 側の解析に載らない）。
+    /// 送信待ちがあるだけでは止めない — 起動時の `session_start` などは PC からの ACK を待って常に残っており、
+    /// PC を起動していないデモでは永遠に切り替えられなくなる（実機確認前に Editor で判明）。</summary>
+    public string DemoSwitchBlockReason
+    {
+        get
+        {
+            if (_busy || _state == TrialState.Running) return "Finish or abort the trial first";
+            if (cpMeasure != null && cpMeasure.IsRunning) return "Finish the Real CP survey first";
+            if (EditingCPs) return "Finish editing the Virtual CPs first";
+            if (tipCalib != null && tipCalib.IsRunning) return "Finish the tip calibration first";
+            if (HasMeasuredData && udp != null && udp.PendingEventCount > 0)
+                return "Measured records are not on the PC yet — keep the app running";
+            return "";
+        }
+    }
+
+    /// <summary>このセッションで測り直しの効かないデータ（Real CP の実測・Virtual CP の編集・試行）を記録したか。</summary>
+    private bool HasMeasuredData =>
+        (cpMeasure != null && (cpMeasure.IsSurveyed || cpMeasure.DoneCount > 0))
+        || (cpEdit != null && cpEdit.EditedCount > 0)
+        || _attempt > 0;
+
+    public bool  CanSwitchToDemo    => string.IsNullOrEmpty(DemoSwitchBlockReason);
+    public float DemoSwitchProgress => _demoHold.Progress(demoSwitchHoldS);
+    public float DemoSwitchHoldS    => demoSwitchHoldS;
+
+    /// <summary>デモ展示モードへ切り替える（HUD のボタンと、両スティック長押しから）。</summary>
+    public void SwitchToDemo()
+    {
+        string why = DemoSwitchBlockReason;
+        if (!string.IsNullOrEmpty(why)) { Debug.LogWarning("[ExperimentController] デモへ切り替えられません: " + why); return; }
+        Debug.Log("[ExperimentController] デモ展示モードへ切り替えます（CP・先端校正なし）");
+        AppMode.LoadDemo();
+    }
+
     private void Update()
     {
+        // 両スティック長押し → デモ。experimentInputEnabled に依らず効かせる（最初の画面の入口なので）
+        if (_demoHold.Update(demoSwitchHoldS)) SwitchToDemo();
+
         ApplyInputMode();          // 測量中だけスティックを通す。局面は毎フレーム変わる
         HandleExperimentInput();
         UpdateSplatVisibilityForPhase();

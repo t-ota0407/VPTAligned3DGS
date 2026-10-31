@@ -113,6 +113,8 @@ public class UDPManager : MonoBehaviour
         public string cv_scene = "";
         public int cv_window;
         public int cv_ok;               // CV が採用したキーフレーム累計
+        public int cv_done;             // CV が処理し終えたキーフレーム数（採否を問わない・解き直し済み）
+        public string cv_on = "";       // CV が処理中の別セッション（このセッションにまだ来ていないとき。来ていれば空）
         public bool cv_pub;             // 直近の解を公開したか
         public string cv_why = "";      // 直近の解の採否理由（棄却ならその理由）
         public bool cv_busy;            // 今まさに hloc で処理中か
@@ -426,6 +428,14 @@ public class UDPManager : MonoBehaviour
     public float CvAgeS => _pong != null ? _pong.cv_age : -1f;
     /// <summary>CV が採用したキーフレームの累計（PC 側）。</summary>
     public int CvAcceptedCount => _pong != null ? _pong.cv_ok : 0;
+    /// <summary>CV が処理し終えたキーフレーム数（採否を問わず、解き直しまで済んだ分。PC 側）。
+    /// <see cref="ServerKeyframeCount"/> 以上で、かつ <see cref="CvBusy"/> でなければ、PC は届いた分を
+    /// すべて処理し終えている（デモの再位置合わせが「送信を止めて結果を待つ」判定に使う）。</summary>
+    public int CvDoneCount => _pong != null ? _pong.cv_done : 0;
+    /// <summary>CV がまだ前のセッションを処理中なら、そのセッション名（今のセッションに来ていれば空）。
+    /// RESET 直後、CV は前の処理を終えるまで新しいセッションへ移れない。その間を「CV 停止」と
+    /// 取り違えないために使う（→ run.py の read_cv_status / heartbeat.py）。</summary>
+    public string CvOnSession => _pong != null ? _pong.cv_on : "";
     /// <summary>直近の解を公開したか（false なら棄却されている）。</summary>
     public bool CvPublished => _pong != null && _pong.cv_pub;
     /// <summary>直近の解の採否理由。**ロックしないときはまずここを見る**

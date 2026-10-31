@@ -1,6 +1,13 @@
 # テキストは LF に正規化（Windows / WSL2 の両方で作業するため）
 * text=auto eol=lf
 
+# Windows のバッチは CRLF でないと cmd.exe が誤動作する（LF だとラベルへのジャンプが外れる等）。
+# 公開リポジトリから取得した初めての Windows でも動くよう、ここだけ CRLF で取り出す。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+# WSL2 の bash で実行するスクリプトは必ず LF（CR が混ざると `$'\r': command not found` で落ちる）
+*.sh  text eol=lf
+
 # Unity の YAML アセット: 専用マージドライバ（未設定なら既定マージにフォールバック）
 *.unity   merge=unityyamlmerge eol=lf
 *.prefab  merge=unityyamlmerge eol=lf
