@@ -24,24 +24,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import importlib.util
+from tests._check import check, finish  # noqa: E402
 
-_spec = importlib.util.spec_from_file_location(
-    "runmod", Path(__file__).resolve().parents[1] / "run.py")
-run = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(run)
+from vptserver import dispatch, events  # noqa: E402
 
 from vptserver.protocol import TYPE_EVENT, TYPE_PING, build  # noqa: E402
 from vptserver.udp_receiver import UdpReceiver  # noqa: E402
 from vptserver.reassembler import Reassembler  # noqa: E402
-
-_fails = []
-
-
-def check(cond, label):
-    print(("  OK   " if cond else "  FAIL ") + label)
-    if not cond:
-        _fails.append(label)
 
 
 def ev(run_id, seq, typ="cp_survey", **kw):
@@ -53,7 +42,7 @@ def ev(run_id, seq, typ="cp_survey", **kw):
 def test_sink_dedup_and_ack():
     print("== EventSink: 重複除去と ACK ==")
     with tempfile.TemporaryDirectory() as d:
-        sink = run.EventSink(Path(d) / "quest_events.jsonl")
+        sink = events.EventSink(Path(d) / "quest_events.jsonl")
         check(sink.ack == 0 and sink.count == 0, "初期状態は ack=0, count=0")
 
         check(sink.add(1, ev("r1", 1, name="CP_01")) is True, "1 件目を受け取る")
@@ -95,7 +84,7 @@ def test_session_demux():
             (base / name / "trial.json").write_text(
                 json.dumps({"label": label}), encoding="utf-8")
 
-        sink = run.EventSink(base / "quest_events.jsonl")
+        sink = events.EventSink(base / "quest_events.jsonl")
         sink.add(1, ev("r1", 1, typ="trial_start", label="trial-01", survey=1))
         sink.add(2, ev("r1", 2, typ="auto_aligned", mark="A1"))
         sink.add(3, ev("r1", 3, typ="trial_start", label="trial-02", trial=2, survey=1))
@@ -136,7 +125,7 @@ def test_survey_stays_in_canonical():
         (base / "session_A" / "trial.json").write_text(
             json.dumps({"label": "trial-01"}), encoding="utf-8")
 
-        sink = run.EventSink(base / "quest_events.jsonl")
+        sink = events.EventSink(base / "quest_events.jsonl")
         # 実験前の測量（trial=0）→ そのあとで最初の試行が始まる
         sink.add(1, ev("r1", 1, typ="cp_survey_start", trial=0, points=6))
         sink.add(2, ev("r1", 2, typ="cp_survey", trial=0, survey=1, name="CP_01"))
@@ -182,7 +171,7 @@ def test_model_cp_json():
     print("== model 側 CP → controlpoints_<model>.json ==")
     with tempfile.TemporaryDirectory() as d:
         base = Path(d)
-        sink = run.EventSink(base / "quest_events.jsonl")
+        sink = events.EventSink(base / "quest_events.jsonl")
         out = base / "controlpoints_scene.json"
 
         sink.add(1, cp_done("r1", 1, "begin", 3, 2))
@@ -219,15 +208,15 @@ def test_model_cp_json():
               f"run が変われば前の点を捨てる（実際 {[e['name'] for e in j['points']]}）")
 
         # ファイル名の規則が Unity の ControlPointStore.FileName と揃っているか
-        check(run.cp_store_filename("my scene/1") == "controlpoints_my_scene_1.json",
+        check(events.cp_store_filename("my scene/1") == "controlpoints_my_scene_1.json",
               "使えない文字は _ に潰す")
-        check(run.cp_store_filename("") == "controlpoints_default.json", "空なら default")
+        check(events.cp_store_filename("") == "controlpoints_default.json", "空なら default")
 
 
 def test_sink_bad_payload():
     print("== 壊れたペイロード ==")
     with tempfile.TemporaryDirectory() as d:
-        sink = run.EventSink(Path(d) / "quest_events.jsonl")
+        sink = events.EventSink(Path(d) / "quest_events.jsonl")
         check(sink.add(1, b"not json") is False, "JSON でなければ捨てる（例外を出さない）")
         check(sink.count == 0, "件数は増えない")
 
@@ -238,7 +227,7 @@ def test_end_to_end_socket():
     import threading
 
     with tempfile.TemporaryDirectory() as d:
-        sink = run.EventSink(Path(d) / "quest_events.jsonl")
+        sink = events.EventSink(Path(d) / "quest_events.jsonl")
 
         # 空きポートを 2 つ取る
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(("127.0.0.1", 0))
@@ -252,7 +241,7 @@ def test_end_to_end_socket():
         class Sess:            # SessionManager の代わり（PONG の組み立てに使う dir / base だけ持つ）
             dir = d
             base = d
-        th = threading.Thread(target=run.udp_loop,
+        th = threading.Thread(target=dispatch.udp_loop,
                               args=(rx, asm, Sess(), result_port, sink), daemon=True)
         th.start()
         time.sleep(0.3)
@@ -290,10 +279,4 @@ if __name__ == "__main__":
     test_model_cp_json()
     test_sink_bad_payload()
     test_end_to_end_socket()
-    print()
-    if _fails:
-        print(f"{len(_fails)} FAILED:")
-        for f in _fails:
-            print("  -", f)
-        sys.exit(1)
-    print("ALL EVENT TESTS PASSED")
+    finish("ALL EVENT TESTS PASSED")

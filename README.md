@@ -137,9 +137,7 @@ Tests for the pure-computation parts:
 
 ```bash
 cd server
-python -m tests.test_geometry
-python -m tests.test_gates
-python -m tests.test_alignment_gates
+python -m tests          # all of them (or one at a time, e.g. python -m tests.test_geometry)
 ```
 
 ---

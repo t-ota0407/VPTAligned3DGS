@@ -25,14 +25,13 @@ import sys
 from pathlib import Path
 
 from . import cv_launcher as L
-from .cv.hloc_db import SUBMODEL_DIRNAME
+from .scenes import scene_state
 
 SERVER_DIR = Path(__file__).resolve().parents[1]
 SCENE_ROOT = SERVER_DIR / "scene_data"
 TESTED_DISTRO = "Ubuntu-24.04"           # setup_wsl.sh の版の固定（Python 3.12）はこれで確認した
 DATA_PORT = 50000                        # run.py の --port の既定（Quest → PC）
 FIREWALL_RULE = f"VPTAligned3DGS (UDP {DATA_PORT} in)"
-NETVLAD_FILE = "global-feats-netvlad.h5"  # hloc_db の最後の段階の出力（これがあれば DB は完成）
 
 # 実行の結果（最後にまとめて出す）
 _summary = []
@@ -87,17 +86,6 @@ def plan_distro(names, found_with_venv):
     if found_with_venv:
         return found_with_venv
     return TESTED_DISTRO if TESTED_DISTRO in names else None
-
-
-def scene_state(scene_dir):
-    """"built"（DB あり）/ "partial"（DB を作りかけて止まった）/ "raw"（DB 未作成）/ "invalid"（COLMAP が無い）。"""
-    d = Path(scene_dir)
-    h = d / "hloc"
-    if (h / SUBMODEL_DIRNAME).is_dir() and (h / NETVLAD_FILE).is_file():
-        return "built"
-    if not (d / "images").is_dir() or not (d / "sparse" / "0" / "images.bin").is_file():
-        return "invalid"
-    return "partial" if h.is_dir() else "raw"
 
 
 def parse_firewall_state(text):

@@ -25,16 +25,12 @@ import numpy as np
 
 from . import geometry as G
 from . import gates
+# DB 構築（hloc_db.py）と完全に一致させる設定（→ vptserver/scenes.py）
+from ..scenes import (FEATURE_CONF, MATCHER_CONF, RETRIEVAL_CONF,
+                      SUBMODEL_DIRNAME, autodetect_scene)
 
 logging.basicConfig(level=logging.INFO, format="[localize] %(message)s")
 log = logging.getLogger("localize")
-
-# DB 構築（hloc_db.py）と完全に一致させる設定。
-FEATURE_CONF = "superpoint_max"
-MATCHER_CONF = "superpoint+lightglue"
-RETRIEVAL_CONF = "netvlad"
-SUBMODEL_DIRNAME = "sfm_superpoint+lightglue"
-
 
 def _imports():
     try:
@@ -43,16 +39,6 @@ def _imports():
                           localize_sfm)
     except Exception as e:
         raise SystemExit(f"hloc/pycolmap が必要（WSL2 の vptcv 環境で実行）。詳細: {e}")
-
-
-def autodetect_scene(scene_root="scene_data"):
-    """scene_data/ 配下でビルド済み（hloc/sfm_* がある）シーンを探す。1つだけなら返す。"""
-    root = Path(scene_root)
-    if not root.is_dir():
-        return None
-    built = [d for d in sorted(root.iterdir())
-             if d.is_dir() and (d / "hloc" / SUBMODEL_DIRNAME).is_dir()]
-    return str(built[0]) if len(built) == 1 else None
 
 
 def read_active_cv_config(base_dir):

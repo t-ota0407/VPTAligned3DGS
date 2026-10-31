@@ -130,7 +130,7 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 - 1 つの変更は小さく。MCP 操作・コンパイル確認・動作確認をこまめに挟む。
 - マジックナンバー（スケール係数・軸反転など座標変換に関わる値）は定数化し、根拠をコメントする。
 - 外部リポジトリ（UnityGaussianSplatting / Meta サンプル）のコードを取り込む場合は、**出所とライセンスをコメントに残す**。
-- **`server/` の Python を編集したら**、純粋計算は `python -m tests.test_geometry` 等で検証する（`server/README.md` のテスト節）。hloc/pycolmap を使う部分は WSL2 実機でしか確認できないので、ユーザーに実行を依頼してログで確認する。WSL・ファイアウォールを操作する部分（`cv_launcher` / `setup_windows` / `setup_wsl.sh`）も同様。**ファイアウォールの変更・WSL の導入など管理者権限の操作は、確認なしに実行しない。**
+- **`server/` の Python を編集したら**、純粋計算は `python -m tests`（全部）／`python -m tests.test_geometry` 等で検証する（`server/README.md` のテスト節）。hloc/pycolmap を使う部分は WSL2 実機でしか確認できないので、ユーザーに実行を依頼してログで確認する。WSL・ファイアウォールを操作する部分（`cv_launcher` / `setup_windows` / `setup_wsl.sh`）も同様。**ファイアウォールの変更・WSL の導入など管理者権限の操作は、確認なしに実行しない。**
 - **プロトコルを変えたら C# と Python の両側を直す。** `tests/test_liveness.py` と `tests/test_events.py` が鍵名・type 定数の一致を機械的に検査する。
 
 ---

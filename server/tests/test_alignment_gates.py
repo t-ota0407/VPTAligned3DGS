@@ -21,16 +21,10 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tests._check import check, finish  # noqa: E402
+
 from vptserver.cv import geometry as G
 from vptserver.cv import gates
-
-_fails = []
-
-
-def check(cond, label):
-    print(("  OK   " if cond else "  FAIL ") + label)
-    if not cond:
-        _fails.append(label)
 
 
 def _rand_sim3(rng, sigma=-0.957):
@@ -165,10 +159,4 @@ if __name__ == "__main__":
     test_conditioning_metric()
     test_expected_scale_gate()
     test_publish_uses_geometry()
-    print()
-    if _fails:
-        print(f"{len(_fails)} FAILED:")
-        for f in _fails:
-            print("  -", f)
-        sys.exit(1)
-    print("ALL ALIGNMENT GATE TESTS PASSED")
+    finish("ALL ALIGNMENT GATE TESTS PASSED")

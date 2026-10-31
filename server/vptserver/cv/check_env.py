@@ -16,7 +16,7 @@ import importlib
 import sys
 
 # localize.py / hloc_db.py と同じ設定名（重みはこの 3 つ分を取得する）
-from .hloc_db import FEATURE_CONF, MATCHER_CONF, RETRIEVAL_CONF
+from ..scenes import FEATURE_CONF, MATCHER_CONF, RETRIEVAL_CONF
 
 MODULES = [
     ("numpy", "numpy"),

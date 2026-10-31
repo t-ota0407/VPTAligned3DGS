@@ -22,16 +22,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from tests._check import check, finish  # noqa: E402
+
 from vptserver import cv_launcher as L
 from vptserver.cv import lifecycle
-
-_fails = []
-
-
-def check(cond, label):
-    print(("  OK   " if cond else "  FAIL ") + label)
-    if not cond:
-        _fails.append(label)
 
 
 # 作者の PC の `wsl -l -v` そのまま（既定は 20.04、CV 環境は 24.04 にある）
@@ -177,9 +171,4 @@ if __name__ == "__main__":
     test_config_and_running_detection()
     test_lifecycle()
     test_restart_policy()
-    if _fails:
-        print(f"\n{len(_fails)} FAILED")
-        for f in _fails:
-            print("  - " + f)
-        sys.exit(1)
-    print("\nALL CV LAUNCHER TESTS PASSED")
+    finish("ALL CV LAUNCHER TESTS PASSED")

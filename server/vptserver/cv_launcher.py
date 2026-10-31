@@ -31,10 +31,12 @@ import threading
 import time
 from pathlib import Path, PureWindowsPath
 
+from .cv.heartbeat import HEARTBEAT_NAME
+from .liveness import heartbeat_file_age
+
 DEFAULT_VENV = "~/vptcv"
 CONFIG_NAME = "launch_config.json"
 CREATE_NO_WINDOW = 0x08000000          # 子プロセスのためにコンソール窓を開かない（Windows のみ有効）
-HEARTBEAT_NAME = "cv_heartbeat.json"   # vptserver/cv/heartbeat.py と同じ
 ALREADY_RUNNING_S = 8.0                # ベースの生存信号がこれより新しければ、別の localize が動いている
 
 # 起動直後に落ちたら「設定の問題」とみなし、何度も再起動しない
@@ -148,23 +150,9 @@ def save_config(server_dir, cfg):
         pass
 
 
-def heartbeat_age_s(path, now=None):
-    """生存信号ファイルの古さ[s]（無ければ None）。
-
-    **ファイルの更新時刻（Windows の時計）で測る。** 中の "t" は WSL の時計で、WSL2 はスリープ復帰後などに
-    Windows と時計がずれることがある（数十秒〜分）。ずれると生きている CV を「止まった」と誤判定する。
-    /mnt/c のファイルは Windows 側が書くので、更新時刻は Windows の時計になる。
-    """
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    return max(0.0, (now if now is not None else time.time()) - st.st_mtime)
-
-
 def cv_already_running(out_dir, now=None):
     """`<out>/cv_heartbeat.json`（ベースの生存信号）が新しければ、別の localize がこのフォルダを処理中。"""
-    age = heartbeat_age_s(Path(out_dir) / HEARTBEAT_NAME, now)
+    age = heartbeat_file_age(Path(out_dir) / HEARTBEAT_NAME, now)
     return age is not None and age <= ALREADY_RUNNING_S
 
 

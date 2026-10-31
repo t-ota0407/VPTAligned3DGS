@@ -61,8 +61,11 @@ server/                                    ← PC 側
 ├─ scene_data/<name>/                      COLMAP 一式（sparse/0 + images/）
 ├─ received/session_<時刻>/                 セッション（KF・cv.json・result_sim3.json）
 ├─ analysis/                               評価実験の集計
-├─ tests/                                  純粋計算のテスト
+├─ tests/                                  純粋計算・プロトコル整合のテスト（`python -m tests` で全部）
+├─ tools/test_send.py                      疎通テスト用のダミー送信
 └─ vptserver/
+   ├─ dispatch / session / liveness / events / state  run.py の中身（パケットの振り分け・セッション・PONG・実験イベント・GUI の状態）
+   ├─ scenes                               DB ができているシーンの判定と DB の設定名（Windows 側と WSL2 側で共用）
    ├─ protocol / reassembler / udp_receiver / keyframe / storage / beacon / gui
    ├─ cv_launcher                          WSL2 の localize の起動・監視・終了（§1）
    ├─ setup_windows                        初回のセットアップ（WSL・ファイアウォール・シーン DB）
@@ -638,6 +641,7 @@ Sim(3) は「Quest ワールドは固定」を前提にする。しかし原点�
 
 ```bash
 cd server
+python -m tests                        # 全部（1 本ずつ別プロセス。落ちたものだけ出力を出す）
 python -m tests.test_geometry          # Umeyama / Sim(3) / クォータニオン（合成データ）
 python -m tests.test_gates             # 品質ゲートの純粋関数
 python -m tests.test_alignment_gates   # 退化（共面・共線）と反射固定の効果

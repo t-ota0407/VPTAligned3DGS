@@ -212,6 +212,8 @@ python analysis\paper_figure.py --indir analysis_out --outdir <図の出力先>
 ## テスト
 
 ```bash
+python -m tests                        # 全部（1 本ずつ別プロセスで実行し、落ちたものだけ出力を出す）
+
 python -m tests.test_geometry          # Umeyama / Sim(3) / クォータニオン（numpy だけで通る）
 python -m tests.test_gates             # 品質ゲートの純粋関数
 python -m tests.test_alignment_gates   # 退化（共面・共線）と反射固定の効果
@@ -237,7 +239,7 @@ server/
 ├─ scripts/run_server.cmd    start_*.bat の共通部分
 ├─ setup_wsl.sh              WSL2 の CV 環境の構築（版を固定。再実行しても安全）
 ├─ launch_config.json        この PC の WSL ディストリ・venv（setup が書き、run.py が読む。.gitignore 済み）
-├─ run.py                    エントリポイント（UDP 受信 → 再構成 → 保存 ＋ ビーコン ＋ Sim(3) 返送 ＋ GUI ＋ CV の起動）
+├─ run.py                    エントリポイント（引数の解析と組み立てだけ。中身は vptserver/ の各モジュール）
 ├─ requirements.txt          受信・保存のコア依存（numpy / opencv / customtkinter）
 ├─ requirements-cv.txt       CV 依存（pycolmap==3.13.0 ほか。torch と hloc は setup_wsl.sh が入れる）
 ├─ constraints-cv.txt        CV の動作確認済みの版（setup_wsl.sh が pip の制約に使う）
@@ -250,9 +252,15 @@ server/
 │  ├─ analyze_experiments.py 測量の健全性・先端校正・収束の要約
 │  ├─ paper_figure.py        上記 CSV → 論文用のベクタ図（段幅に合わせる）
 │  └─ tune_gates.py          ゲート閾値の掃引（歩き方ごとのロック率・誤差の模擬）
-├─ tests/                    純粋計算・プロトコル整合のテスト（上記）
+├─ tests/                    純粋計算・プロトコル整合のテスト（上記。共通の check() は tests/_check.py）
 ├─ tools/test_send.py        疎通テスト用のダミー送信（Quest 不要。`python tools/test_send.py 127.0.0.1`）
 └─ vptserver/
+   ├─ dispatch.py            データポートに届くパケットの振り分け（キーフレーム / PING→PONG / RESET / 実験イベント）
+   ├─ session.py             セッションフォルダの切替・cv.json の書き出し・Sim(3) の Quest への返送
+   ├─ liveness.py            PONG の中身（CV の生存信号の読み取り。古さはファイルの更新時刻で測る）
+   ├─ events.py              実験イベント（type=7）の保存・model 側 CP の JSON への組み直し
+   ├─ state.py               GUI とコンソールが読む共有状態
+   ├─ scenes.py              DB ができているシーンの判定と DB の設定名（Windows 側と WSL2 側の両方が使う）
    ├─ protocol.py            パケット定義と parse()
    ├─ reassembler.py         reqId ごとにチャンクを集約 → Keyframe
    ├─ udp_receiver.py        UDP 受信ループ（timeout で Ctrl-C 対応）

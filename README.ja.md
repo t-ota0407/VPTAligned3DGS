@@ -124,9 +124,7 @@ python -m analysis.accuracy_vs_time    # 1 試行の収束曲線
 
 ```bash
 cd server
-python -m tests.test_geometry
-python -m tests.test_gates
-python -m tests.test_alignment_gates
+python -m tests          # 全部（個別に回すなら python -m tests.test_geometry など）
 ```
 
 ---

@@ -7,6 +7,8 @@ import sys
 import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from tests._check import check, finish  # noqa: E402
 from vptserver.cv import geometry as G
 
 
@@ -29,11 +31,6 @@ def quat_to_R(q):
     ])
 
 
-def check(name, cond):
-    print(("  OK  " if cond else "  FAIL") + " " + name)
-    assert cond, name
-
-
 def test_case(sigma_true, reflect, noise=0.0, outliers=0, seed=1):
     rng = np.random.default_rng(seed)
     n = 12
@@ -54,16 +51,16 @@ def test_case(sigma_true, reflect, noise=0.0, outliers=0, seed=1):
 
     tag = f"[sigma={s_signed:+.3f} reflect={reflect} noise={noise} outliers={outliers}]"
     print(tag, f"-> recovered sigma={sigma:+.4f} rmse={out['rmse_m']:.4g} inliers={out['inliers'].sum()}/{n}")
-    check(tag + " scale sign", np.sign(sigma) == np.sign(s_signed))
-    check(tag + " scale mag", abs(abs(sigma) - abs(s_signed)) < 1e-2 * abs(s_signed) + 1e-3)
-    check(tag + " R proper(det=+1)", abs(np.linalg.det(R) - 1.0) < 1e-6)
+    check(np.sign(sigma) == np.sign(s_signed), tag + " scale sign")
+    check(abs(abs(sigma) - abs(s_signed)) < 1e-2 * abs(s_signed) + 1e-3, tag + " scale mag")
+    check(abs(np.linalg.det(R) - 1.0) < 1e-6, tag + " R proper(det=+1)")
     # quat が R を再現
-    check(tag + " quat<->R", np.allclose(quat_to_R(q), R, atol=1e-5))
+    check(np.allclose(quat_to_R(q), R, atol=1e-5), tag + " quat<->R")
     if noise == 0 and outliers == 0:
-        check(tag + " R matches", np.allclose(R, R_true, atol=1e-4))
-        check(tag + " t matches", np.allclose(t, t_true, atol=1e-3))
+        check(np.allclose(R, R_true, atol=1e-4), tag + " R matches")
+        check(np.allclose(t, t_true, atol=1e-3), tag + " t matches")
         # 全点が良インライア
-        check(tag + " all inliers", out["inliers"].sum() == n)
+        check(out["inliers"].sum() == n, tag + " all inliers")
 
 
 def test_umeyama_basic():
@@ -103,4 +100,4 @@ if __name__ == "__main__":
     test_robust()
     test_quat_roundtrip()
     test_colmap_quat()
-    print("\nALL GEOMETRY TESTS PASSED")
+    finish("ALL GEOMETRY TESTS PASSED")

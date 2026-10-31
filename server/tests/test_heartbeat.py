@@ -16,22 +16,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import importlib.util
+from tests._check import check, finish  # noqa: E402
 
 from vptserver.cv.heartbeat import Heartbeat, HEARTBEAT_NAME
-
-_spec = importlib.util.spec_from_file_location(
-    "runmod", Path(__file__).resolve().parents[1] / "run.py")
-run = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(run)
-
-_fails = []
-
-
-def check(cond, label):
-    print(("  OK   " if cond else "  FAIL ") + label)
-    if not cond:
-        _fails.append(label)
+from vptserver import liveness  # noqa: E402
 
 
 def _read(p):
@@ -89,7 +77,7 @@ def test_thread_keeps_alive_while_main_blocked():
             time.sleep(1.0)            # ← メインループが hloc で 1 秒止まっている想定（何も書かない）
             t2 = _read(sess / HEARTBEAT_NAME)["t"]
             check(t2 - t1 >= 0.5, f"処理中もスレッドが書き続ける（{t2 - t1:.2f}s 進んだ）")
-            s = run.read_cv_status(sess, base)
+            s = liveness.read_cv_status(sess, base)
             check(s["cv_alive"] is True and s["cv_busy"] is True and s["cv_busy_n"] == 25,
                   "run.py から見て「生きていて処理中」")
         finally:
@@ -111,19 +99,19 @@ def test_reset_while_previous_session_busy():
         hb.start()
         try:
             time.sleep(0.5)
-            s = run.read_cv_status(new, base)   # run.py は新しいセッションを見ている
+            s = liveness.read_cv_status(new, base)   # run.py は新しいセッションを見ている
             check(s["cv_alive"] is True and s.get("cv_on") == "session_old",
                   "新しいセッションには無くても「生きていて session_old を処理中」と伝わる")
             check(s.get("cv_ok", 0) == 0 and s.get("cv_done", 0) == 0,
                   "前のセッションの枚数（13 / 16）は新しいセッションのものとして伝わらない")
-            pong = json.loads(run.build_pong_payload(1, "session_new", 5, s).decode())
+            pong = json.loads(liveness.build_pong_payload(1, "session_new", 5, s).decode())
             check(pong["cv_on"] == "session_old" and pong["session"] == "session_new",
                   "PONG: session（run.py の今のセッション）と cv_on（CV が処理中のセッション）が別に載る")
 
             hb.reset_session(new)                # CV が前の処理を終えて新しいセッションへ移った
             hb.update(busy=False, total_ok=0, done=0)
             hb.write_now()
-            s = run.read_cv_status(new, base)
+            s = liveness.read_cv_status(new, base)
             check(s["cv_alive"] is True and "cv_on" not in s and s["cv_done"] == 0,
                   "移った後は新しいセッションのハートビートを使う")
         finally:
@@ -134,7 +122,4 @@ if __name__ == "__main__":
     test_contents()
     test_thread_keeps_alive_while_main_blocked()
     test_reset_while_previous_session_busy()
-    if _fails:
-        print(f"\n{len(_fails)} FAILED")
-        sys.exit(1)
-    print("\nALL HEARTBEAT TESTS PASSED")
+    finish("ALL HEARTBEAT TESTS PASSED")

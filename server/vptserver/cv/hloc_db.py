@@ -31,15 +31,13 @@ import argparse
 import logging
 from pathlib import Path
 
+# DB の設定名・出力名は localize と完全に一致させる（→ vptserver/scenes.py）
+from ..scenes import FEATURE_CONF, MATCHER_CONF, RETRIEVAL_CONF, SUBMODEL_DIRNAME
+
 logging.basicConfig(level=logging.INFO, format="[hloc_db] %(message)s")
 log = logging.getLogger("hloc_db")
 
-# DB と online で**完全に一致**させる設定名（混在禁止）。localizer.py と共有する。
-FEATURE_CONF = "superpoint_max"          # 局所特徴（高解像で取りこぼし減）
-MATCHER_CONF = "superpoint+lightglue"    # マッチャ
-RETRIEVAL_CONF = "netvlad"               # 大域記述子（画像検索）
 COVIS_NUM = 20                            # 三角測量用に各画像の共visibility上位
-SUBMODEL_DIRNAME = "sfm_superpoint+lightglue"
 
 
 def _require_hloc():

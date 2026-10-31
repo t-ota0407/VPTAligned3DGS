@@ -20,15 +20,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from vptserver import setup_windows as S
+from tests._check import check, finish  # noqa: E402
 
-_fails = []
-
-
-def check(cond, label):
-    print(("  OK   " if cond else "  FAIL ") + label)
-    if not cond:
-        _fails.append(label)
+from vptserver import scenes, setup_windows as S  # noqa: E402
 
 
 def test_plan_distro():
@@ -45,21 +39,35 @@ def test_scene_state():
     print("== シーンの DB の状態 ==")
     with tempfile.TemporaryDirectory() as d:
         s = Path(d) / "scene"
-        check(S.scene_state(s) == "invalid", "空 → COLMAP ではない")
+        check(scenes.scene_state(s) == "invalid", "空 → COLMAP ではない")
         (s / "images").mkdir(parents=True)
         (s / "sparse" / "0").mkdir(parents=True)
         (s / "sparse" / "0" / "images.bin").write_bytes(b"")
-        check(S.scene_state(s) == "raw", "images/ と sparse/0 だけ → DB 未作成")
-        (s / "hloc" / S.SUBMODEL_DIRNAME).mkdir(parents=True)
-        check(S.scene_state(s) == "partial",
+        check(scenes.scene_state(s) == "raw", "images/ と sparse/0 だけ → DB 未作成")
+        (s / "hloc" / scenes.SUBMODEL_DIRNAME).mkdir(parents=True)
+        check(scenes.scene_state(s) == "partial",
               "SfM はあるが NetVLAD が無い → 作りかけ（最後の段階の前で止まった）")
-        (s / "hloc" / S.NETVLAD_FILE).write_bytes(b"")
-        check(S.scene_state(s) == "built", "NetVLAD まである → できている")
+        (s / "hloc" / scenes.NETVLAD_FILE).write_bytes(b"")
+        check(scenes.scene_state(s) == "built", "NetVLAD まである → できている")
 
         b = Path(d) / "built_only"
-        (b / "hloc" / S.SUBMODEL_DIRNAME).mkdir(parents=True)
-        (b / "hloc" / S.NETVLAD_FILE).write_bytes(b"")
-        check(S.scene_state(b) == "built", "DB だけ配布されたシーン（images/ 無し）も使える")
+        (b / "hloc" / scenes.SUBMODEL_DIRNAME).mkdir(parents=True)
+        (b / "hloc" / scenes.NETVLAD_FILE).write_bytes(b"")
+        check(scenes.scene_state(b) == "built", "DB だけ配布されたシーン（images/ 無し）も使える")
+
+        # run.py のシーン一覧と localize の自動検出は、DB ができているものだけを数える
+        # （作りかけのシーンを選ぶと localize が起動時に落ちる）
+        p = Path(d) / "partial"
+        (p / "images").mkdir(parents=True)
+        (p / "sparse" / "0").mkdir(parents=True)
+        (p / "sparse" / "0" / "images.bin").write_bytes(b"")
+        (p / "hloc" / scenes.SUBMODEL_DIRNAME).mkdir(parents=True)
+        built = scenes.list_built_scenes(d)
+        check([Path(x).name for x in built] == ["built_only", "scene"],
+              "一覧は DB ができているものだけ（作りかけ・空は出さない）")
+        check(all("\\" not in x for x in built), "一覧のパスは / 区切り（WSL の localize も読む）")
+        check(scenes.autodetect_scene(d) is None, "2 つあれば自動検出しない（曖昧）")
+        check(scenes.autodetect_scene(str(b)) is None, "シーンの親フォルダでなければ空")
 
 
 # 作者の PC の実際の出力（パブリックの学内 Wi-Fi・python に過去の許可規則）を縮めたもの
@@ -130,9 +138,4 @@ if __name__ == "__main__":
     test_scene_state()
     test_firewall()
     test_no_input_means_no()
-    if _fails:
-        print(f"\n{len(_fails)} FAILED")
-        for f in _fails:
-            print("  - " + f)
-        sys.exit(1)
-    print("\nALL SETUP TESTS PASSED")
+    finish("ALL SETUP TESTS PASSED")

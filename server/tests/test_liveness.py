@@ -19,23 +19,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import importlib.util
+from tests._check import check, finish  # noqa: E402
 
-_spec = importlib.util.spec_from_file_location(
-    "runmod", Path(__file__).resolve().parents[1] / "run.py")
-run = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(run)
+from vptserver import liveness  # noqa: E402
 
 CS_UDP = (Path(__file__).resolve().parents[2] /
           "unity/projects/VPTAligned3DGS/Assets/Scripts/UDPManager.cs")
-
-_fails = []
-
-
-def check(cond, label):
-    print(("  OK   " if cond else "  FAIL ") + label)
-    if not cond:
-        _fails.append(label)
 
 
 def write_hb(path, d, age=0.0):
@@ -53,49 +42,49 @@ def write_hb(path, d, age=0.0):
 def test_cv_status():
     print("== CV ハートビートの鮮度判定 ==")
     with tempfile.TemporaryDirectory() as d:
-        s = run.read_cv_status(d)
+        s = liveness.read_cv_status(d)
         check(s["cv_alive"] is False and s["cv_age"] == -1.0,
               "ハートビート無し → cv_alive=False, age=-1")
 
         hb = Path(d) / "cv_heartbeat.json"
         hb.write_text(json.dumps({"t": time.time(), "pid": 1,
                                   "scene": "scene_data/example1", "window": 5}))
-        s = run.read_cv_status(d)
+        s = liveness.read_cv_status(d)
         check(s["cv_alive"] is True and s["cv_age"] < 1.0, "直近のハートビート → 稼働中")
         check(s.get("cv_scene") == "scene_data/example1", "scene が伝わる")
 
-        write_hb(hb, {"pid": 1}, age=run.CV_STALE_S + 5)
-        s = run.read_cv_status(d)
-        check(s["cv_alive"] is False and s["cv_age"] > run.CV_STALE_S,
-              f"{run.CV_STALE_S}s より古い → 停止扱い")
+        write_hb(hb, {"pid": 1}, age=liveness.CV_STALE_S + 5)
+        s = liveness.read_cv_status(d)
+        check(s["cv_alive"] is False and s["cv_age"] > liveness.CV_STALE_S,
+              f"{liveness.CV_STALE_S}s より古い → 停止扱い")
 
         # 処理中は hloc が長時間ブロックしてハートビートを更新できない。
         # busy を見て猶予を延ばさないと「CV 停止」と誤表示してしまう。
         write_hb(hb, {"pid": 1, "busy": True, "busy_n": 5}, age=30)
-        s = run.read_cv_status(d)
+        s = liveness.read_cv_status(d)
         check(s["cv_alive"] is True and s["cv_busy"] is True and s["cv_busy_n"] == 5,
               "処理中(busy)なら 30 秒古くても稼働扱い")
         write_hb(hb, {"pid": 1, "busy": False}, age=30)
-        s = run.read_cv_status(d)
+        s = liveness.read_cv_status(d)
         check(s["cv_alive"] is False, "busy でなければ 30 秒古いと停止扱い")
 
         # WSL2 の時計が Windows より遅れている（スリープ復帰後に起きる）。中の "t" は 120 秒前でも、
         # ファイルは今書かれた → 生きている。"t" で測っていた頃は「CV 停止」と誤判定した
         hb.write_text(json.dumps({"t": time.time() - 120, "pid": 1}))
-        s = run.read_cv_status(d)
+        s = liveness.read_cv_status(d)
         check(s["cv_alive"] is True and s["cv_age"] < 1.0,
               "WSL の時計が 2 分遅れていても、ファイルの更新時刻で測るので稼働扱い")
 
         # 処理済み枚数。デモは「送信を止めてから PC が全部処理し終えたか」を kf と比べて判定する
         hb.write_text(json.dumps({"t": time.time(), "pid": 1, "total_ok": 9, "done": 12}))
-        s = run.read_cv_status(d)
+        s = liveness.read_cv_status(d)
         check(s["cv_ok"] == 9 and s["cv_done"] == 12, "処理済み枚数(done)が cv_done として伝わる")
         hb.write_text(json.dumps({"t": time.time(), "pid": 1}))
-        s = run.read_cv_status(d)
+        s = liveness.read_cv_status(d)
         check(s["cv_done"] == 0, "done が無い古いハートビートでも cv_done=0（壊れない）")
 
         hb.write_text("これは JSON ではない")
-        s = run.read_cv_status(d)
+        s = liveness.read_cv_status(d)
         check(s["cv_alive"] is False, "壊れたハートビート → 例外を出さず停止扱い")
 
 
@@ -110,32 +99,32 @@ def test_cv_status_base_fallback():
     with tempfile.TemporaryDirectory() as base:
         sess = Path(base) / "session_new"
         sess.mkdir()
-        s = run.read_cv_status(sess, base)
+        s = liveness.read_cv_status(sess, base)
         check(s["cv_alive"] is False and s["cv_age"] == -1.0, "どこにも無い → ハートビート無し（cv_age=-1）")
 
         (Path(base) / "cv_heartbeat.json").write_text(json.dumps(
             {"t": time.time(), "pid": 1, "scene": "x", "session": "session_old", "busy": True, "busy_n": 25}))
-        s = run.read_cv_status(sess, base)
+        s = liveness.read_cv_status(sess, base)
         check(s["cv_alive"] is True and s["cv_on"] == "session_old" and s["cv_busy"] is True,
               "ベースが新しい → 生きていて、前のセッション(session_old)を処理中と伝わる")
         check("cv_ok" not in s and "cv_done" not in s,
               "前のセッションの枚数は伝えない（新しいセッションの枚数と取り違えさせない）")
-        check(run.read_cv_status(sess)["cv_age"] == -1.0, "base_dir を渡さなければ従来どおり")
+        check(liveness.read_cv_status(sess)["cv_age"] == -1.0, "base_dir を渡さなければ従来どおり")
 
         write_hb(Path(base) / "cv_heartbeat.json",
-                 {"pid": 1, "session": "session_old", "busy": False}, age=run.CV_STALE_S + 5)
-        s = run.read_cv_status(sess, base)
-        check(s["cv_alive"] is False and s["cv_age"] > run.CV_STALE_S, "ベースも古い → 停止扱い")
+                 {"pid": 1, "session": "session_old", "busy": False}, age=liveness.CV_STALE_S + 5)
+        s = liveness.read_cv_status(sess, base)
+        check(s["cv_alive"] is False and s["cv_age"] > liveness.CV_STALE_S, "ベースも古い → 停止扱い")
 
         (sess / "cv_heartbeat.json").write_text(json.dumps({"t": time.time(), "pid": 1, "total_ok": 3, "done": 4}))
-        s = run.read_cv_status(sess, base)
+        s = liveness.read_cv_status(sess, base)
         check(s["cv_alive"] is True and s["cv_done"] == 4 and "cv_on" not in s,
               "セッションにハートビートがあればそちらを使う（cv_on は付けない）")
 
 
 def test_pong_payload():
     print("== PONG ペイロード ==")
-    payload = run.build_pong_payload(7, "session_20260729_120000", 12,
+    payload = liveness.build_pong_payload(7, "session_20260729_120000", 12,
                                      {"cv_alive": True, "cv_age": 0.4})
     d = json.loads(payload.decode("utf-8"))
     check(d["seq"] == 7, "seq をそのまま返す（RTT 計算に必要）")
@@ -143,7 +132,7 @@ def test_pong_payload():
     check(d["kf"] == 12, "PC 側の受信枚数を返す")
     check(d["cv_alive"] is True and d["cv_age"] == 0.4, "CV 状態を返す")
 
-    d2 = json.loads(run.build_pong_payload(0, None, 0, None).decode("utf-8"))
+    d2 = json.loads(liveness.build_pong_payload(0, None, 0, None).decode("utf-8"))
     check(d2["session"] == "" and d2["kf"] == 0, "session=None でも壊れない")
 
 
@@ -167,7 +156,7 @@ def test_cs_python_key_parity():
         if fm:
             cs_fields.add(fm.group(1))
 
-    py_keys = set(json.loads(run.build_pong_payload(
+    py_keys = set(json.loads(liveness.build_pong_payload(
         1, "s", 0, {"cv_alive": True, "cv_age": 0.0,
                     "cv_scene": "x", "cv_window": 3, "cv_ok": 12, "cv_done": 14, "cv_on": "session_x",
                     "cv_pub": False, "cv_why": "rmse 超過",
@@ -200,10 +189,4 @@ if __name__ == "__main__":
     test_pong_payload()
     test_cs_python_key_parity()
     test_protocol_constants()
-    print()
-    if _fails:
-        print(f"{len(_fails)} FAILED:")
-        for f in _fails:
-            print("  -", f)
-        sys.exit(1)
-    print("ALL LIVENESS TESTS PASSED")
+    finish("ALL LIVENESS TESTS PASSED")

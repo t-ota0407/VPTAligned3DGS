@@ -101,7 +101,7 @@ public class UDPManager : MonoBehaviour
         public int inliers, n;
     }
 
-    /// <summary>PONG の中身（run.py の build_pong_payload と鍵名を一致させること）。</summary>
+    /// <summary>PONG の中身（server/vptserver/liveness.py の build_pong_payload と鍵名を一致させること）。</summary>
     [Serializable]
     private class PongMsg
     {
@@ -430,7 +430,7 @@ public class UDPManager : MonoBehaviour
     public int CvDoneCount => _pong != null ? _pong.cv_done : 0;
     /// <summary>CV がまだ前のセッションを処理中なら、そのセッション名（今のセッションに来ていれば空）。
     /// RESET 直後、CV は前の処理を終えるまで新しいセッションへ移れない。その間を「CV 停止」と
-    /// 取り違えないために使う（→ run.py の read_cv_status / heartbeat.py）。</summary>
+    /// 取り違えないために使う（→ server/vptserver/liveness.py の read_cv_status / heartbeat.py）。</summary>
     public string CvOnSession => _pong != null ? _pong.cv_on : "";
     /// <summary>直近の解を公開したか（false なら棄却されている）。</summary>
     public bool CvPublished => _pong != null && _pong.cv_pub;
