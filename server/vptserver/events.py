@@ -206,43 +206,56 @@ class EventSink:
             print(f"[server] CP JSON を書きました（{len(pts)} 点 / うち編集 {edited}）: {path}")
         return path
 
-    def describe(self, d):
-        """GUI/コンソール用の 1 行説明。"""
+    def describe(self, d, lang="ja"):
+        """GUI/コンソール用の 1 行説明。lang="en" で英語（GUI の既定）、それ以外は日本語（コンソール）。"""
+        def L(ja, en):
+            return en if lang == "en" else ja
         t = d.get("type", "?")
         # CP の測量は実験前に 1 回だけ（試行ごとではない）。survey 番号で試行と対応づく。
         if t == "cp_survey":
-            return f"CP 測量 {d.get('name')} (survey #{d.get('survey')})"
+            return L(f"CP 測量 {d.get('name')} (survey #{d.get('survey')})",
+                     f"CP survey {d.get('name')} (survey #{d.get('survey')})")
         if t == "cp_survey_start":
-            return f"CP 測量 開始 ({d.get('points')} 点)"
+            return L(f"CP 測量 開始 ({d.get('points')} 点)",
+                     f"CP survey started ({d.get('points')} points)")
         if t == "cp_survey_done":
-            return (f"CP 測量 #{d.get('survey')} 完了 "
-                    f"({d.get('points')} 点 / 広がり {d.get('span_m')} m)")
+            return L(f"CP 測量 #{d.get('survey')} 完了 ({d.get('points')} 点 / 広がり {d.get('span_m')} m)",
+                     f"CP survey #{d.get('survey')} done ({d.get('points')} points / span {d.get('span_m')} m)")
         if t == "cp_survey_cancel":
-            return f"CP 測量 中断 ({d.get('done')} 点まで)"
+            return L(f"CP 測量 中断 ({d.get('done')} 点まで)",
+                     f"CP survey cancelled (after {d.get('done')} points)")
         if t == "cp_survey_invalidated":
-            return f"CP 測量 #{d.get('survey')} が無効化: {d.get('why')}"
+            return L(f"CP 測量 #{d.get('survey')} が無効化: {d.get('why')}",
+                     f"CP survey #{d.get('survey')} invalidated: {d.get('why')}")
         # model 側 CP の VR 内編集（位置合わせ前の準備。測量とは別物）
         if t == "cp_model_edit":
             a = d.get("action")
             if a == "start":
-                return f"model CP 編集 開始 ({d.get('points')} 点)"
+                return L(f"model CP 編集 開始 ({d.get('points')} 点)",
+                         f"Model CP editing started ({d.get('points')} points)")
             if a == "end":
-                return "model CP 編集 終了（変更なし）"
-            return (f"model CP {d.get('name')} を置き直し "
-                    f"(ビルド値から {float(d.get('moved_m') or 0) * 100:.1f} cm)")
+                return L("model CP 編集 終了（変更なし）", "Model CP editing ended (no change)")
+            cm = float(d.get('moved_m') or 0) * 100
+            return L(f"model CP {d.get('name')} を置き直し (ビルド値から {cm:.1f} cm)",
+                     f"Model CP {d.get('name')} moved ({cm:.1f} cm from the build value)")
         if t == "cp_model_edit_revert":
-            return f"model CP {d.get('name')} をビルド値へ戻した"
+            return L(f"model CP {d.get('name')} をビルド値へ戻した",
+                     f"Model CP {d.get('name')} reverted to the build value")
         if t == "cp_model_point":
-            return f"model CP 座標 {d.get('name')}"
+            return L(f"model CP 座標 {d.get('name')}", f"Model CP position {d.get('name')}")
         if t == "cp_model_edit_done":
             if d.get("phase") == "begin":
-                return f"model CP 編集 完了 → 受信中 ({d.get('points')} 点)"
-            return (f"model CP 編集 完了: {d.get('edited')}/{d.get('points')} 点を変更 → "
-                    f"{cp_store_filename(str(d.get('model') or 'default'))}")
+                return L(f"model CP 編集 完了 → 受信中 ({d.get('points')} 点)",
+                         f"Model CP editing done, receiving ({d.get('points')} points)")
+            fn = cp_store_filename(str(d.get('model') or 'default'))
+            return L(f"model CP 編集 完了: {d.get('edited')}/{d.get('points')} 点を変更 → {fn}",
+                     f"Model CP editing done: {d.get('edited')}/{d.get('points')} points changed -> {fn}")
         if t == "trial_start":
-            return f"試行開始 {d.get('label')}"
+            return L(f"試行開始 {d.get('label')}", f"Trial started {d.get('label')}")
         if t == "trial_end":
-            return f"試行終了 {d.get('label') or d.get('trial')}: {d.get('verdict')}"
+            return L(f"試行終了 {d.get('label') or d.get('trial')}: {d.get('verdict')}",
+                     f"Trial ended {d.get('label') or d.get('trial')}: {d.get('verdict')}")
         if t == "tracking_origin_changed":
-            return f"トラッキング原点が移動 ({d.get('cause')})"
+            return L(f"トラッキング原点が移動 ({d.get('cause')})",
+                     f"Tracking origin moved ({d.get('cause')})")
         return str(t)

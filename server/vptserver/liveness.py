@@ -83,6 +83,20 @@ def read_cv_status(session_dir, base_dir=None):
         return {"cv_alive": False, "cv_age": -1.0}
 
 
+def read_session_heartbeat(session_dir):
+    """セッションの生存信号の中身をそのまま返す（無い・読めないときは None）。GUI 用。
+
+    GUI は直近の解の詳細（solve_inliers / solve_n / solve_why 全文）も出すので、PONG 用に
+    鍵を絞った read_cv_status とは別に読む。**PONG の鍵は増やさない**（C# の PongMsg と
+    test_liveness が鍵の一致を検査している）。
+    """
+    try:
+        p = Path(session_dir) / HEARTBEAT_NAME
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+    except Exception:
+        return None
+
+
 def _read_base_cv_status(base_dir, session_dir):
     """セッションにハートビートが無いときの代わり。CV が生きていて別のセッションを処理中なら
     `cv_on` にそのセッション名を入れて返す。ベースにも無ければ「ハートビート無し」（cv_age=-1）。"""

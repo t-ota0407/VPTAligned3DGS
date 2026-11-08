@@ -28,9 +28,13 @@ import threading
 from pathlib import Path
 
 from vptserver import gui as gui_mod
+from vptserver import i18n
 from vptserver.beacon import Beacon, DEFAULT_BEACON_PORT
+from vptserver.cv_launcher import load_config, save_config
 from vptserver.dispatch import udp_loop
 from vptserver.events import EventSink
+from vptserver.gui_status import infer_mode
+from vptserver.liveness import read_cv_status, read_session_heartbeat
 from vptserver.reassembler import Reassembler
 from vptserver.scenes import autodetect_scene, list_built_scenes
 from vptserver.session import ResultSender, SessionManager, write_cv_config
@@ -71,6 +75,11 @@ def main():
     ap.add_argument("--result-file", default=None, help="監視する Sim(3) JSON（既定: <out>/result_sim3.json）")
     ap.add_argument("--no-result", action="store_true")
     ap.add_argument("--no-gui", action="store_true", help="GUIウインドウを出さずヘッドレス実行")
+    ap.add_argument("--lang", choices=i18n.LANGS, default=None,
+                    help="GUI の言語（省略時: 前回 GUI で選んだもの → 英語）。GUI の右上でも切り替えられる")
+    ap.add_argument("--mode", choices=("experiment", "demo"), default=None,
+                    help="GUI に出す「評価実験 / デモ展示」（省略時: 保存先の名前から。received → 実験、"
+                         "received_demo → デモ）")
     ap.add_argument("--verbose", action="store_true")
     # ↓ WSL2 の CV へ渡す設定（セッションフォルダの cv.json に書き出す）。WSL2 は引数なしで起動可。
     ap.add_argument("--scene", default=None, help="DBシーン（省略時 scene_data から自動検出）。cv.json に記録")
@@ -144,7 +153,8 @@ def main():
         if cfg.get("expected_scale") is not None:
             cv_cfg["expected_scale"] = abs(float(cfg["expected_scale"]))
         write_cv_for(sessions.dir)
-        STATE.event(f"cv.json 更新: scene={cv_cfg['scene']} every={cv_cfg['every']} min={cv_cfg['min']}")
+        tail = f"scene={cv_cfg['scene']} every={cv_cfg['every']} min={cv_cfg['min']}"
+        STATE.event(f"cv.json 更新: {tail}", en=f"cv.json updated: {tail}")
         start_cv_if_ready()                 # シーンを選んだ時点で CV を起動（起動済みなら何もしない）
 
     session_dir = sessions.start()          # 最初のセッション作成＋cv.json 書き出し
@@ -155,7 +165,9 @@ def main():
         msg = (f"シーンが決まっていないため、CV はまだ起動しません（候補: {', '.join(cv_scenes) or 'なし'}）。"
                "GUI でシーンを選ぶか、--scene scene_data/<name> を付けて起動してください")
         print("[server] " + msg)
-        STATE.event(msg)
+        STATE.event(msg, en=f"No scene chosen yet, so the CV worker is not started "
+                            f"(built scenes: {', '.join(cv_scenes) or 'none'}). "
+                            "Choose one in the GUI, or start with --scene scene_data/<name>", level="warn")
     else:
         start_cv_if_ready()
 
@@ -201,9 +213,23 @@ def main():
         threading.Thread(target=udp_loop, args=(rx, asm, sessions, args.result_port, events),
                          kwargs={"state": STATE}, daemon=True).start()
         print("[server] GUI ウインドウを表示中（閉じると終了）")
+        server_dir = Path.cwd()
+
+        def probe():
+            """GUI が 1 秒ごとに読む CV の状態（PONG と同じ判定 ＋ 直近の解の詳細 ＋ 起動の状態）。"""
+            sdir = sessions.dir
+            return {"cv": read_cv_status(sdir, sessions.base),
+                    "hb": read_session_heartbeat(sdir),
+                    "launcher": cv.status() if cv is not None else None,
+                    "scene": cv_cfg.get("scene"), "out": args.out}
+
         try:
             gui_mod.run_dashboard(STATE, on_close=cleanup,
-                                  config=cv_cfg, scenes=cv_scenes, on_config=update_cv)
+                                  config=cv_cfg, scenes=cv_scenes, on_config=update_cv,
+                                  probe=probe, on_retry=(cv.retry if cv is not None else None),
+                                  lang=args.lang or load_config(server_dir).get("gui_lang"),
+                                  on_lang=lambda lg: save_config(server_dir, {"gui_lang": lg}),
+                                  mode=args.mode or infer_mode(args.out), out_dir=args.out)
         except KeyboardInterrupt:
             cleanup()
     else:

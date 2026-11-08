@@ -45,6 +45,13 @@ MAX_QUICK_FAILS = 3
 WATCHDOG_S = 5.0                       # この間隔で「動いていなければ起動する」を見る（再起動の間隔にもなる）
 EXIT_NO_VENV = 3                       # build_cv_script が venv 無しで返す終了コード
 
+# localize の INFO の行のうち、GUI のイベント欄の「重要」にも出すもの（ほかの INFO は「すべて」でだけ見える）
+CV_NOTABLE_INFO = ("DB ロード", "scene 変更", "セッション追従", "設定更新")
+# 準備ができたことを示す行（緑）
+CV_READY_INFO = ("watch 開始", "CUDA: available")
+# 1 行に収める長さ（GUI のイベント欄。コンソールと cv.log には全文が出る）
+GUI_LINE_MAX = 300
+
 
 # ================= 純粋な部分（テスト対象） =================
 
@@ -134,6 +141,44 @@ def build_cv_script(server_wsl, watch_wsl, venv=DEFAULT_VENV):
             f"exec python -m vptserver.cv.localize --watch {shlex.quote(watch_wsl)} --exit-on-stdin-eof")
 
 
+def cv_event_level(line):
+    """localize の出力 1 行の重要度（GUI のイベント欄の色と、「重要」に出すかどうか）。
+
+    "error" / "warn"  … localize が `ERROR:` / `WARNING:` を付けた行（→ cv/localize.py の _LevelFormatter）、
+                        hloc の `… WARNING]`、Python の例外（Traceback と `XxxError:` の行）
+    "ok"              … 準備ができた（watch 開始・CUDA が使える）
+    "info"            … 覚えておくべき出来事（DB のロード・シーン変更・セッションの追従・設定の更新）
+    "debug"           … それ以外（キーフレームごとの採否・hloc の進み具合など）。「すべて」でだけ見える
+    """
+    if ("ERROR" in line or "CRITICAL" in line or "Traceback" in line
+            or re.search(r"\b[A-Za-z]*(Error|Exception)\b:", line)):
+        return "error"
+    if "WARNING" in line:
+        return "warn"
+    if any(k in line for k in CV_READY_INFO):
+        return "ok"
+    if any(k in line for k in CV_NOTABLE_INFO):
+        return "info"
+    return "debug"
+
+
+def gui_line(line):
+    """GUI に出す形に整える。hloc の進み具合（tqdm）は復帰文字（CR）で上書きしながら 1 行に溜まるので、
+    最後の表示だけを残す。長すぎる行は末尾を残して切る。"""
+    parts = [x for x in line.split("\r") if x.strip()]
+    text = parts[-1] if parts else line
+    return text if len(text) <= GUI_LINE_MAX else "…" + text[-(GUI_LINE_MAX - 1):]
+
+
+def cuda_from_line(line):
+    """localize が起動時に出す行（`CUDA: available` / `CUDA: NOT available`）から GPU の可否。該当しなければ None。"""
+    if "CUDA: NOT available" in line:
+        return False
+    if "CUDA: available" in line:
+        return True
+    return None
+
+
 def load_config(server_dir):
     p = Path(server_dir) / CONFIG_NAME
     try:
@@ -143,9 +188,16 @@ def load_config(server_dir):
 
 
 def save_config(server_dir, cfg):
+    """設定を書く。**既にある鍵は残し、渡した鍵だけを上書きする。**
+
+    WSL の設定（wsl_distro / cv_venv）と GUI の言語（gui_lang）を同じファイルに持つので、
+    片方を保存したときにもう片方を消さないようにする。
+    """
     p = Path(server_dir) / CONFIG_NAME
     try:
-        p.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        merged = dict(load_config(server_dir))
+        merged.update(cfg)
+        p.write_text(json.dumps(merged, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception:
         pass
 
@@ -242,9 +294,11 @@ class CvLauncher:
         self.distro = distro or cfg.get("wsl_distro")
         self.venv = venv or cfg.get("cv_venv") or DEFAULT_VENV
         self.emit = emit
-        self.on_event = on_event or (lambda msg: None)
-        self.problem = ""            # 起動できない理由（GUI / コンソール用）
+        self.on_event = on_event or (lambda msg, en=None, level="info": None)
+        self.problem = ""            # 起動できない理由（コンソール・GUI の日本語表示用）
+        self.problem_en = ""         # 同じ理由の英語（GUI の既定の表示用）
         self.gave_up = False         # 設定の問題で起動を諦めた
+        self.cuda = None             # localize が起動時に出す CUDA の可否（True / False / 未確認 None）
         self._proc = None
         self._pid = None             # Linux 側の localize の PID（localize が最初に "pid=N" を出す）
         self._wanted = False
@@ -263,10 +317,40 @@ class CvLauncher:
     def running(self):
         return self._proc is not None and self._proc.poll() is None
 
-    def _say(self, msg, event=False):
+    def _say(self, msg, event=False, en=None, level="info"):
+        """コンソールへ出す。event=True なら GUI のイベント欄にも（en はその英語・level は重要度）。"""
         self.emit(msg)
         if event:
-            self.on_event(msg)
+            self.on_event(msg, en=en, level=level)
+
+    def _fail(self, ja, en):
+        """起動を諦める。理由は GUI の一番上にも出る（英語・日本語）。"""
+        self.problem, self.problem_en = ja, en
+        self.gave_up = True
+
+    def status(self):
+        """GUI が 1 秒ごとに読む今の状態（読むだけ。どのスレッドから呼んでもよい）。
+
+        phase: "failed"   … 起動を諦めた（problem に理由）
+               "running"  … localize のプロセスが動いている（生存信号はシーン DB の読み込み後から）
+               "external" … 別の localize がこのフォルダを処理中なので、起動せずに待っている
+               "starting" … 起動を依頼済み（WSL の確認中・異常終了からの再起動待ち）
+               "idle"     … まだ依頼されていない（シーンが決まっていない）
+        """
+        if self.gave_up:
+            phase = "failed"
+        elif self.running:
+            phase = "running"
+        elif self._external_noted:
+            phase = "external"
+        elif self._wanted:
+            phase = "starting"
+        else:
+            phase = "idle"
+        return {"phase": phase, "problem": self.problem, "problem_en": self.problem_en or self.problem,
+                "distro": self.distro, "cuda": self.cuda,
+                "run_s": (time.time() - self._started_t) if phase == "running" else None,
+                "log": str(self._log_path)}
 
     # ---- 公開 API ----
 
@@ -278,6 +362,21 @@ class CvLauncher:
             self._watchdog = threading.Thread(target=self._watch, name="cv-watchdog", daemon=True)
             self._watchdog.start()
         self._wake.set()
+
+    def retry(self):
+        """諦めた後にもう一度試す（GUI の「再試行」）。setup_windows.bat をやり直した後などに使う。
+
+        ディストリとパスも決め直す（セットアップで CV 環境の場所が変わったかもしれないため）。
+        """
+        if not self.gave_up:
+            return
+        self.problem = self.problem_en = ""
+        self._quick_fails = 0
+        self._server_wsl = self._watch_wsl = None
+        self.gave_up = False
+        self._say("[cv] CV の起動をやり直します", event=True, en="[cv] Retrying to start the CV worker",
+                  level="mark")
+        self.start()
 
     def stop(self, timeout=8.0):
         """localize を止める。標準入力を閉じる（→ 自分で終了）→ 終わらなければ Linux 側を kill → wsl.exe を止める。"""
@@ -327,12 +426,16 @@ class CvLauncher:
                 if not self._external_noted:
                     self._external_noted = True
                     self._say("[cv] 別の localize がこのフォルダを処理中のため、起動を待ちます"
-                              "（手動で起動したものをそのまま使い、終わったら引き継ぎます）", event=True)
+                              "（手動で起動したものをそのまま使い、終わったら引き継ぎます）", event=True,
+                              en="[cv] Another localize is already processing this folder. Using it, "
+                                 "and taking over when it ends")
                 continue
             self._external_noted = False
             if self._server_wsl is None and not self.prepare():
                 self.gave_up = True
-                self._say("[cv] CV を自動起動できません: " + self.problem, event=True)
+                self._say("[cv] CV を自動起動できません: " + self.problem, event=True,
+                          en="[cv] Cannot start the CV worker: " + (self.problem_en or self.problem),
+                          level="error")
                 continue
             self._spawn()
 
@@ -340,10 +443,12 @@ class CvLauncher:
         """ディストリとパスを決める。失敗したら False（self.problem に理由）。"""
         if os.name != "nt":
             self.problem = "CV の自動起動は Windows でのみ使えます（--no-cv で手動起動）"
+            self.problem_en = "Starting the CV worker automatically works only on Windows (use --no-cv)"
             return False
         if not wsl_available():
             self.problem = ("WSL がインストールされていません。server\\setup_windows.bat の案内に従ってください"
                             " (WSL is not installed — run server\\setup_windows.bat)")
+            self.problem_en = "WSL is not installed. Run server\\setup_windows.bat and follow its guidance"
             return False
         names, _ = list_distros()
         if self.distro and self.distro not in names:
@@ -355,6 +460,8 @@ class CvLauncher:
                 self.problem = (f"どの WSL ディストリにも CV 環境（{self.venv}）がありません。"
                                 "server\\setup_windows.bat を実行してください"
                                 f" (CV environment {self.venv} not found in WSL — run server\\setup_windows.bat)")
+                self.problem_en = (f"No WSL distribution has the CV environment ({self.venv}). "
+                                   "Run server\\setup_windows.bat")
                 return False
             self.distro = found
         save_config(self.server_dir, {"wsl_distro": self.distro, "cv_venv": self.venv})
@@ -363,6 +470,8 @@ class CvLauncher:
             self._watch_wsl = to_wsl_path(self.distro, self.out_dir)
         except ValueError as e:
             self.problem = str(e)
+            self.problem_en = ("This folder is not reachable from WSL (network drive or UNC path). "
+                               "Put the repository on a local drive")
             return False
         self._say(f"[cv] WSL '{self.distro}' で CV を起動します（{self.venv}・監視 {self._watch_wsl}）")
         return True
@@ -375,16 +484,17 @@ class CvLauncher:
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 creationflags=CREATE_NO_WINDOW, env=dict(os.environ, WSL_UTF8="1"))
         except Exception as e:
-            self.problem = f"wsl.exe を起動できません: {e}"
-            self.gave_up = True
-            self._say("[cv] " + self.problem, event=True)
+            self._fail(f"wsl.exe を起動できません: {e}", f"Cannot start wsl.exe: {e}")
+            self._say("[cv] " + self.problem, event=True, en="[cv] " + self.problem_en, level="error")
             return
         with self._lock:
             self._proc = proc
             self._pid = None
         self._started_t = time.time()
+        self.cuda = None                 # 起動し直したら確かめ直す（localize が起動時に出す）
         threading.Thread(target=self._pump, args=(proc,), name="cv-output", daemon=True).start()
-        self._say(f"[cv] localize を起動しました（ログ: {self._log_path}）", event=True)
+        self._say(f"[cv] localize を起動しました（ログ: {self._log_path}）", event=True,
+                  en=f"[cv] localize started (log: {self._log_path})")
 
     def _pump(self, proc):
         """localize の出力を 1 行ずつ run.py へ流し、cv.log にも残す。終わったら異常終了を扱う。"""
@@ -401,14 +511,15 @@ class CvLauncher:
                 m = re.search(r"\bpid=(\d+)\b", line)
                 if m and self._pid is None:
                     self._pid = int(m.group(1))
+                cuda = cuda_from_line(line)
+                if cuda is not None:
+                    self.cuda = cuda
                 self.emit("[cv] " + line)
                 if logf is not None:
                     logf.write(time.strftime("%Y-%m-%d %H:%M:%S ") + line + "\n")
                     logf.flush()
-                # 利用者が気づくべき行だけ GUI のイベント欄にも出す
-                if any(k in line for k in ("CUDA", "WARNING", "ERROR", "Error", "Traceback",
-                                           "not found", "解決できません", "DB ロード")):
-                    self.on_event("[cv] " + line[-160:])
+                # GUI のイベント欄へ。重要度は行から決める（debug の行は「すべて」でだけ見える）
+                self.on_event("[cv] " + gui_line(line), level=cv_event_level(line))
         except Exception:
             pass
         finally:
@@ -423,15 +534,20 @@ class CvLauncher:
         lived = time.time() - self._started_t
         self._quick_fails = self._quick_fails + 1 if lived < QUICK_FAIL_S else 0
         if code == EXIT_NO_VENV:
-            self.gave_up = True
-            self.problem = (f"WSL '{self.distro}' に CV 環境（{self.venv}）がありません。"
-                            "server\\setup_windows.bat を実行してください")
-            self._say("[cv] " + self.problem, event=True)
+            self._fail(f"WSL '{self.distro}' に CV 環境（{self.venv}）がありません。"
+                       "server\\setup_windows.bat を実行してください",
+                       f"The CV environment ({self.venv}) is missing in WSL '{self.distro}'. "
+                       "Run server\\setup_windows.bat")
+            self._say("[cv] " + self.problem, event=True, en="[cv] " + self.problem_en, level="error")
         elif self._quick_fails >= MAX_QUICK_FAILS:
-            self.gave_up = True
-            self.problem = (f"localize が起動直後に {MAX_QUICK_FAILS} 回続けて終了しました（終了コード {code}）。"
-                            f"{self._log_path} を確認してください")
-            self._say("[cv] " + self.problem + "。自動再起動はしません", event=True)
+            self._fail(f"localize が起動直後に {MAX_QUICK_FAILS} 回続けて終了しました（終了コード {code}）。"
+                       f"{self._log_path} を確認してください",
+                       f"localize exited right after starting {MAX_QUICK_FAILS} times in a row "
+                       f"(exit code {code}). Check {self._log_path}")
+            self._say("[cv] " + self.problem + "。自動再起動はしません", event=True,
+                      en="[cv] " + self.problem_en + ". Not restarting automatically", level="error")
         else:
             self._say(f"[cv] localize が終了しました（終了コード {code}）。{WATCHDOG_S:.0f} 秒後に再起動します",
-                      event=True)
+                      event=True,
+                      en=f"[cv] localize exited (exit code {code}). Restarting in {WATCHDOG_S:.0f} s",
+                      level="warn")

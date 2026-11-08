@@ -104,9 +104,9 @@ python -m vptserver.cv.hloc_db --scene scene_data/<name>       # 例: scene_data
 **① PC: `server\start_experiment.bat` をダブルクリック**
 
 `run.py`（受信・返送・GUI）が起動し、**WSL2 の CV（`localize`）も自動で起動する**。WSL2 のターミナルを開く必要はない。起動ごとに `received/session_<時刻>/` と `cv.json` を作る。
-- コンソールに `[cv] … CUDA: available` → `[cv] … watch 開始` と出れば準備完了（初回はディストリの起動で数十秒かかる）。GUI と HUD の `● CV` でも分かる。
+- GUI の一番上が緑の `Ready`（日本語表示なら `準備完了`）になれば準備完了（初回はディストリの起動で数十秒かかり、その間は青の `Starting the CV worker…`）。Quest の HUD の `● CV` でも分かる。何かが足りなければ、一番上に赤か琥珀で理由と次にやることが出る。GUI は既定で英語、右上で日本語に切り替えられる。
 - シーンが複数あるときは `start_experiment.bat --scene scene_data/<name>`、または GUI でシーンを選ぶ（選んだ時点で CV が起動する）。
-- **ウインドウを閉じると CV も止まる。** CV の出力は `received/cv.log` にも残る。
+- **ウインドウを閉じると CV も止まる。** 処理中・試行の途中に閉じようとすると確かめる。CV の出力は `received/cv.log` にも残る（GUI のイベント欄の `All` で全部、`Open cv.log` でファイルを開ける）。GUI のヘッダに `Experiment`（デモなら `Demo`）と出ていることを確かめる。
 - 従来どおり手で動かすなら `run.py --no-cv` と、WSL2 で `python -m vptserver.cv.localize --watch received`（`server/README.md`「実行」）。
 
 **② Quest（アプリ起動）**
@@ -570,7 +570,8 @@ PC の画面を見たいときは外さずに一旦置く（外すとスリー�
 | `Rejected: <理由>`（琥珀） | PC は解いているが公開ゲートで落としている | 理由がそのまま出る（rmse 超過 / インライア率 / 配置）。§7-2 の閾値を見直す |
 | `accepted 3 · match 1/2 (25 cm apart)` | 解は届いているが、独立な解が一致しない | 歩き方が足りない。部屋を大きく回る（§7-2b）|
 
-`run.py` のコンソール（`[cv]` の行・`<out>/cv.log`）にも同じ理由が数値付きで出ます:
+PC の GUI の `THIS SESSION` → `Last solve` にも、直近の解の採否と理由が出ます（`✕ rejected (13/14) — not enough movement: …`）。
+`run.py` のコンソール（`[cv]` の行・`<out>/cv.log`）には数値付きで出ます:
 
 ```
 Sim(3) 非公開（ゲート不合格）: rmse=0.0912m(>0.08m) [n=24 inliers=18 rmse=0.0912 scale=-0.958 間隔=2.82 広がり=0.95]
@@ -598,7 +599,7 @@ Sim(3) 非公開（ゲート不合格）: rmse=0.0912m(>0.08m) [n=24 inliers=18 
 | `DB 特徴が無い`（Assertion） | §4-4 の DB 構築を未実行。`build_scene_db.bat` |
 | Quest で 3DGS が見えない | Vulkan / Multi-Pass / `GaussianSplatURPFeature` を **両** Renderer に付与、を確認 |
 | HUD が `✕ Server` | `run.py` が動いていない / 到達しない。診断行に IP が出ていて `no reply` / `silent 12s` なら run.py 側の問題、`no server (no beacon / no manual IP)` ならネットワーク（§6）|
-| HUD が `● Server` だが `✕ CV` | CV（`localize`）が起動していないか落ちている。`run.py` のコンソールの `[cv]` の行を見る（落ちても 5 秒後に自動で起動し直す）。このまま試行を始めても必ずタイムアウトする |
+| HUD が `● Server` だが `✕ CV` | CV（`localize`）が起動していないか落ちている。PC の GUI の一番上に理由が出る（起動を諦めたときは `Retry` と `Open log`）。詳しくは `run.py` のコンソールの `[cv]` の行（落ちても 5 秒後に自動で起動し直す）。このまま試行を始めても必ずタイムアウトする |
 | HUD が `✕ Server` のまま・PC の受信枚数が 0 | ファイアウォール（特にネットワークが「パブリック」）。`setup_windows.bat` を再実行（§6） |
 | パススルー映像の板が視界を塞ぐ | デバッグ用の `[BuildingBlock] Passthrough Camera Visualizer`。既定では `y = −100 m` に退避してある。誰かが原点へ戻した状態なので、Inspector で `Position.y` を −100 に戻す（使いたいときだけ 0 に）|
 | Quest の送信数は増えるが PC 受信枚数が増えない | UDP が届いていない。§6 のネットワーク切り分けへ（診断行で両方の数を比較できる）|

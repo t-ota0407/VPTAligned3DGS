@@ -30,7 +30,24 @@ from . import gates
 from ..scenes import (FEATURE_CONF, MATCHER_CONF, RETRIEVAL_CONF,
                       SUBMODEL_DIRNAME, autodetect_scene)
 
-logging.basicConfig(level=logging.INFO, format="[localize] %(message)s")
+class _LevelFormatter(logging.Formatter):
+    """警告以上だけ重要度を書く（`[localize] WARNING: …` / `[localize] ERROR: …`）。
+
+    run.py（cv_launcher.cv_event_level）がこれを見て GUI のイベント欄を色分けする。以前は重要度が
+    行に無く、文言のキーワードで拾っていたため、ゲート不合格や「この試行は使えない」の警告が GUI に
+    届いていなかった。INFO は今までどおり `[localize] …`（コンソールと cv.log を読みやすく保つ）。
+    """
+
+    def format(self, record):
+        msg = super().format(record)
+        if record.levelno >= logging.WARNING:
+            return f"[localize] {record.levelname}: {msg}"
+        return f"[localize] {msg}"
+
+
+_handler = logging.StreamHandler()
+_handler.setFormatter(_LevelFormatter("%(message)s"))
+logging.basicConfig(level=logging.INFO, handlers=[_handler])
 log = logging.getLogger("localize")
 
 

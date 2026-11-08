@@ -81,6 +81,8 @@ python run.py --no-beacon          # ビーコンを止める（手動 IP 運用
 python run.py --scene scene_data/example2 --every 5 --min 5
 python run.py --port 50000 --beacon-port 50001 --out received
 python run.py --no-cv              # CV を自動起動しない（WSL2 で手で起動する。下記）
+python run.py --lang ja            # GUI を日本語で開く（既定: 前回 GUI で選んだもの → 英語）
+python run.py --mode demo          # GUI に出す「評価実験 / デモ展示」（既定: 保存先の名前から。received_demo → デモ）
 python run.py --wsl-distro Ubuntu-24.04 --cv-venv ~/vptcv   # ディストリ・venv を指定（launch_config.json に記録）
 ```
 
@@ -238,7 +240,7 @@ server/
 ├─ build_scene_db.bat        シーンの再ローカライズ DB の構築（WSL2）
 ├─ scripts/run_server.cmd    start_*.bat の共通部分
 ├─ setup_wsl.sh              WSL2 の CV 環境の構築（版を固定。再実行しても安全）
-├─ launch_config.json        この PC の WSL ディストリ・venv（setup が書き、run.py が読む。.gitignore 済み）
+├─ launch_config.json        この PC の WSL ディストリ・venv と GUI の言語（setup と GUI が書き、run.py が読む。.gitignore 済み）
 ├─ run.py                    エントリポイント（引数の解析と組み立てだけ。中身は vptserver/ の各モジュール）
 ├─ requirements.txt          受信・保存のコア依存（numpy / opencv / customtkinter）
 ├─ requirements-cv.txt       CV 依存（pycolmap==3.13.0 ほか。torch と hloc は setup_wsl.sh が入れる）
@@ -267,7 +269,9 @@ server/
    ├─ keyframe.py            Keyframe（K / 姿勢 / 画像）データクラスと K_for_image()
    ├─ storage.py             jpg + json 保存
    ├─ beacon.py              サーバ存在通知ビーコン（Quest の自動検出用）
-   ├─ gui.py                 customtkinter の GUI（未導入ならヘッドレスで動く）
+   ├─ gui.py                 customtkinter の GUI（描画だけ。未導入ならヘッドレスで動く）
+   ├─ gui_status.py          GUI に出す判定（総合ステータス・CV の行・枚数。純粋関数）
+   ├─ i18n.py                GUI の文言（英語・日本語。既定は英語）
    ├─ cv_launcher.py         WSL2 の localize の起動・監視・終了（ディストリの検出・パスの変換）
    ├─ setup_windows.py       初回のセットアップ（WSL・ファイアウォール・シーン DB）
    └─ cv/
@@ -282,7 +286,25 @@ server/
       └─ localize.py         オンライン・ローカライズ（検索 → マッチ → PnP）＋ 自己テスト ＋ Sim(3)
 ```
 
-GUI（customtkinter のネイティブウインドウ）には、Quest の接続状態・受信数・現在のセッション・最新 Sim(3)（scale/inliers/rmse）・イベントログが出る。設定の編集は即座に `cv.json` へ反映される。customtkinter が入っていなければヘッドレスで動く。
+### GUI
+
+`run.py` のウインドウ（customtkinter）だけで「準備できたか・止まっていないか・なぜ確定しないか・次に何をするか」が分かるようにしてある。コンソールの `[cv]` の行は詳しく調べるときだけ見ればよい。customtkinter が入っていなければヘッドレスで動く。
+
+| 場所 | 出るもの |
+|---|---|
+| ヘッダ | **評価実験（青）/ デモ展示（紫）**の札と言語の切替。札は保存先の名前で決まる（`start_experiment.bat` → `received` → 実験、`start_demo.bat` → `received_demo` → デモ。`--mode` で上書き）。窓の題名にも出る |
+| 一番上（総合ステータス） | いま一番大事な 1 行と次にやること。赤＝CV を起動できない（`Retry`・`Open log`）/ 琥珀＝人の操作が要る（シーン未選択・Quest 未接続・CPU で動作）/ 青＝待てばよい（CV 起動中・処理中・前のセッションの片付け）/ 緑＝準備完了。判定の材料は Quest の HUD と同じ（PONG の CV 生存・PING）。Quest 未接続のときは、この PC の IPv4（Quest の Manual IP に入れる値）も出る |
+| STATUS | Quest（**PING で生存を見る**ので、キーフレームを送っていない試行前・デモの表示中も「接続中」と出る）/ CV（動作中・ディストリ・GPU か CPU か・処理中の枚数）/ セッション |
+| THIS SESSION | 受信・処理済み・採用・待ちの枚数（待ちが減らずに増え続けるなら CV が追いついていない）/ **直近の解の採否と理由**（公開ゲートで落ちた解も `✕ rejected — rmse=…` の形で出る）/ 最後に Quest へ返送した Sim(3)（反射固定で scale は常に負が正常なので、大きさ `\|scale\|` で出す） |
+| SETTINGS | scene / every / min。変更は即 `cv.json` へ反映。シーンが決まっていないときは「(select a scene)」を琥珀で出す（CV はシーンを選んだ時点で起動する）。**キーフレームが届いた後にシーンを変えようとすると確かめる**（`localize` は DB を読み直し、そのセッションの途中経過を捨てるため。Quest で試行の開始・Re-align をすれば新しいセッションになる） |
+| EVENTS | 重要度で色分け（赤＝エラー / 琥珀＝警告・ゲート不合格 / 緑＝準備完了・Sim(3) の返送 / 青＝RESET・試行の区切り）。**`Important`**（既定）は覚えておくべき行だけ、**`All`** は CV の出力をすべて（キーフレームごとの採否・hloc の進み具合。キーフレームの受信は 1 行にまとめて書き換える）。新しい行は下に足し、いちばん下を見ているときだけ送る（上へ戻って読んでいる間は動かない）。下の `Open folder` / `Open cv.log` で保存先と CV のログを開く |
+| 下の 1 行 | 保存先の絶対パス・この PC の IPv4・ポート・稼働時間 |
+
+**閉じるとき**、CV が処理中・待ちがある、またはキーフレームが 30 秒以内に届いている（試行・再位置合わせの途中）なら確かめる。閉じると CV（`localize`）も止まるため。
+
+CV の行の重要度は `localize` の出力から決める。`localize` は警告以上の行に `[localize] WARNING:` / `[localize] ERROR:` を付けて出す（`cv/localize.py` の `_LevelFormatter`。INFO は今までどおり `[localize] …`）。`cv_launcher.cv_event_level` がそれと hloc の `… WARNING]`・Python の例外を見て色を決める。
+
+**言語**は既定が英語で、右上で日本語に切り替えられる。選んだ言語は `launch_config.json` の `gui_lang` に残る（`--lang en|ja` が優先）。窓の大きさは画面の作業領域に合わせる（表示倍率 150% のノート PC でも収まるよう、総合ステータスの下を 2 列にしている）。
 
 `received/` `received_demo/` `scene_data/` `analysis_out/` `Hierarchical-Localization/` `.venv/` `launch_config.json` は `.gitignore` 済み。
 

@@ -79,7 +79,8 @@ class SessionManager:
         """
         if self._flat:
             print("[server] --flat のためリセットを無視（セッション分離が無効）")
-            self._state.event("RESET 受信（--flat のため無視）")
+            self._state.event("RESET 受信（--flat のため無視）", en="RESET received (ignored: --flat)",
+                              level="warn")
             return self.dir
 
         self._trial += 1
@@ -95,7 +96,8 @@ class SessionManager:
             print("[server] trial.json 書き出し失敗:", e)
         label = (info or {}).get("label") or (info or {}).get("trial") or self._trial
         print(f"[server] === RESET: 新セッション {self._state.session}（trial={label}）===")
-        self._state.event(f"RESET → 新セッション {self._state.session}（trial={label}）")
+        self._state.event(f"RESET → 新セッション {self._state.session}（trial={label}）",
+                          en=f"RESET -> new session {self._state.session} (trial={label})", level="mark")
         return self.dir
 
     def _new_dir(self):

@@ -66,7 +66,8 @@ server/                                    ← PC 側
 └─ vptserver/
    ├─ dispatch / session / liveness / events / state  run.py の中身（パケットの振り分け・セッション・PONG・実験イベント・GUI の状態）
    ├─ scenes                               DB ができているシーンの判定と DB の設定名（Windows 側と WSL2 側で共用）
-   ├─ protocol / reassembler / udp_receiver / keyframe / storage / beacon / gui
+   ├─ protocol / reassembler / udp_receiver / keyframe / storage / beacon
+   ├─ gui / gui_status / i18n             PC の GUI（描画 / 判定の純粋関数 / 英語・日本語の文言）
    ├─ cv_launcher                          WSL2 の localize の起動・監視・終了（§1）
    ├─ setup_windows                        初回のセットアップ（WSL・ファイアウォール・シーン DB）
    └─ cv/ colmap_model, geometry, gates, hloc_db, migrate_model, localize, heartbeat（CV の生存信号。別スレッド）,
@@ -522,6 +523,9 @@ Sim(3) は「Quest ワールドは固定」を前提にする。しかし原点�
 | `ALREADY_RUNNING_S`（cv_launcher） | 8 | s | ベースの生存信号がこれより新しければ、別の `localize` が処理中として起動しない |
 | `stop(timeout)`（cv_launcher） | 8 | s | 正常終了で標準入力を閉じてから待つ時間。過ぎたら Linux 側の PID を kill |
 | `grace_s`（cv/lifecycle） | 10 | s | 標準入力が EOF になってから、重い処理の途中でも強制終了するまでの猶予 |
+| `QUEST_STALE_S`（gui_status） | 6 | s | PC の GUI で Quest を「接続中」とみなす PING の鮮度（`pingIntervalS` 2 s の 3 回分）。表示だけで、送受信の判定には使わない |
+| `RECENT_KF_S`（gui_status） | 30 | s | キーフレームがこれより新しく届いていれば、GUI を閉じるときに確かめる（試行・再位置合わせの途中とみなす） |
+| `CV_SILENT_AFTER_S`（gui_status） | 300 | s | `localize` のプロセスが動いているのに生存信号がこれだけ無ければ、GUI が異常として赤で出す（初回の WSL 起動と DB の読み込みの分は待つ） |
 
 ### 10.2 Quest 側（`AlignmentManager` / `UDPManager` / `KeyframeUploader`）
 
