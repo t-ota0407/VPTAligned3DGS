@@ -71,7 +71,8 @@ server/                                    ← PC 側
    ├─ cv_launcher                          WSL2 の localize の起動・監視・終了（§1）
    ├─ setup_windows                        初回のセットアップ（WSL・ファイアウォール・シーン DB）
    └─ cv/ colmap_model, geometry, gates, hloc_db, migrate_model, localize, heartbeat（CV の生存信号。別スレッド）,
-          lifecycle（起動元が終わったら終わる）, check_env（環境の確認と重みの事前取得）
+          lifecycle（起動元が終わったら終わる）, check_env（環境の確認と重みの事前取得）,
+          warm_hloc（モデルと DB を読み込んだまま hloc と同じ計算をする高速経路）, check_warm（その突き合わせ）
 
 unity/projects/VPTAligned3DGS/Assets/
 ├─ GSTestScene.unity                       実験用シーン（Scene List の先頭＝起動時）
@@ -523,6 +524,7 @@ Sim(3) は「Quest ワールドは固定」を前提にする。しかし原点�
 | `ALREADY_RUNNING_S`（cv_launcher） | 8 | s | ベースの生存信号がこれより新しければ、別の `localize` が処理中として起動しない |
 | `stop(timeout)`（cv_launcher） | 8 | s | 正常終了で標準入力を閉じてから待つ時間。過ぎたら Linux 側の PID を kill |
 | `grace_s`（cv/lifecycle） | 10 | s | 標準入力が EOF になってから、重い処理の途中でも強制終了するまでの猶予 |
+| `DB_FEATURE_CACHE`（cv/warm_hloc） | 400 | 枚 | 照合のために DB 画像の局所特徴をメモリに置く枚数（LRU。superpoint_max で 1 枚 ≈ 2 MB）。結果には影響しない（速さだけ） |
 | `QUEST_STALE_S`（gui_status） | 6 | s | PC の GUI で Quest を「接続中」とみなす PING の鮮度（`pingIntervalS` 2 s の 3 回分）。表示だけで、送受信の判定には使わない |
 | `RECENT_KF_S`（gui_status） | 30 | s | キーフレームがこれより新しく届いていれば、GUI を閉じるときに確かめる（試行・再位置合わせの途中とみなす） |
 | `CV_SILENT_AFTER_S`（gui_status） | 300 | s | `localize` のプロセスが動いているのに生存信号がこれだけ無ければ、GUI が異常として赤で出す（初回の WSL 起動と DB の読み込みの分は待つ） |

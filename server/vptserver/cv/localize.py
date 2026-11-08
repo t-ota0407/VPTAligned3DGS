@@ -20,6 +20,8 @@ geometry.solve_sim3_ransac に渡すと、splatRoot に与える Sim(3)（反射
 import argparse
 import json
 import logging
+import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -136,6 +138,7 @@ class Localizer:
         _imports()
         self.topk = topk
         self.scene_str = None
+        self.warm = None             # モデルと DB を読み込んだまま回す経路（warm_hloc）。None なら hloc の main を呼ぶ
         self.load_scene(scene_dir)
 
     def load_scene(self, scene_dir):
@@ -162,6 +165,29 @@ class Localizer:
         assert self.db_global.exists(), f"DB 大域記述子が無い: {self.db_global}"
         log.info("DB ロード: scene=%s images=%d points3D=%d",
                  self.scene_str, len(self.db_names), self.model.num_points3D())
+        self._init_warm()
+
+    def _init_warm(self):
+        """モデルと DB をメモリに置いたまま回す経路（cv/warm_hloc.py）を用意する。
+
+        起動時に済ませておけば、最初のキーフレームで待たせない。用意できなければ hloc の main を毎回呼ぶ
+        （以前の動き。遅いが結果は同じ）。環境変数 VPT_CV_PLAIN_HLOC=1 で常に以前の動きにできる。
+        """
+        if os.environ.get("VPT_CV_PLAIN_HLOC"):
+            self.warm = None
+            return
+        try:
+            from .warm_hloc import WarmHloc
+            t0 = time.time()
+            if self.warm is None:
+                self.warm = WarmHloc(self.feat_conf, self.retr_conf, self.match_conf)
+                self.warm.load_models()
+            self.warm.set_db(self.db_features, self.db_global, self.db_names)
+            log.info("モデルと DB をメモリに読み込みました（%.1f s。以後キーフレームごとには読み直さない）",
+                     time.time() - t0)
+        except Exception as e:
+            log.warning("モデルと DB をメモリに置く準備に失敗 → 毎回読み直す以前のやり方で処理します（遅い）: %s", e)
+            self.warm = None
 
     def localize(self, query_image_dir, query_names, intrinsics, work, exclude_self=False):
         """クエリ群をローカライズ。
@@ -172,11 +198,44 @@ class Localizer:
         work:            一時出力ディレクトリ
         返り値: {name: dict(qvec(4), tvec(3), center(3), num_inliers)}（失敗名は欠落）
         """
-        from hloc import extract_features, match_features, pairs_from_retrieval, localize_sfm
         work = Path(work); work.mkdir(parents=True, exist_ok=True)
-
-        # 自己テストで DB 画像をクエリにする場合は DB 特徴を再利用、そうでなければ抽出
+        # 自己テストで DB 画像をクエリにする場合は DB 特徴を再利用する（hloc の main で処理）
         same_as_db = (Path(query_image_dir).resolve() == self.images.resolve())
+        if self.warm is not None and not same_as_db:
+            try:
+                return self._localize_warm(query_image_dir, query_names, intrinsics, work)
+            except Exception as e:
+                # 一度失敗したら以後も通常経路（失敗のたびに時間を無駄にしない）
+                log.warning("モデルを読み込んだままの処理で失敗 → 以後は毎回読み直す以前のやり方で処理します: %r", e)
+                self.warm = None
+                work = work / "plain"
+                work.mkdir(parents=True, exist_ok=True)
+        return self._localize_plain(query_image_dir, query_names, intrinsics, work,
+                                    exclude_self, same_as_db)
+
+    def _localize_warm(self, query_image_dir, query_names, intrinsics, work):
+        """warm_hloc でローカライズする（hloc の main と同じ結果。違いは読み込み済みのものを使い回すことだけ）。"""
+        t0 = time.time()
+        q_feat = work / (self.feat_conf["output"] + ".h5")
+        feats = self.warm.extract("feat", query_image_dir, query_names, q_feat)
+        q_global = self.warm.extract("retr", query_image_dir, query_names,
+                                     work / (self.retr_conf["output"] + ".h5"))
+        t1 = time.time()
+        loc_pairs = work / "loc_pairs.txt"
+        pairs = self.warm.retrieve(q_global, query_names, loc_pairs, self.topk)
+        reads0 = self.warm.db_feature_reads
+        matches = self.warm.match(pairs, feats, work / "loc_matches.h5")
+        t2 = time.time()
+        out = self._pnp(query_names, intrinsics, work, loc_pairs, q_feat, matches)
+        t3 = time.time()
+        log.info("ローカライズ %d 枚: %.1f s（特徴 %.1f / 照合 %.1f・DB 読込 %d 枚 / PnP %.1f）",
+                 len(query_names), t3 - t0, t1 - t0, t2 - t1,
+                 self.warm.db_feature_reads - reads0, t3 - t2)
+        return out
+
+    def _localize_plain(self, query_image_dir, query_names, intrinsics, work, exclude_self, same_as_db):
+        """hloc の main 関数を呼んでローカライズする（以前のやり方。呼ぶたびにモデルと DB を読み直す）。"""
+        from hloc import extract_features, match_features, pairs_from_retrieval
         if same_as_db:
             q_feat, q_global = self.db_features, self.db_global
         else:
@@ -199,7 +258,11 @@ class Localizer:
         matches = match_features.main(self.match_conf, loc_pairs, q_feat,
                                       matches=work / "loc_matches.h5",
                                       features_ref=self.db_features)
+        return self._pnp(query_names, intrinsics, work, loc_pairs, q_feat, matches)
 
+    def _pnp(self, query_names, intrinsics, work, loc_pairs, q_feat, matches):
+        """hloc の localize_sfm（2D-3D → PnP）を回して結果を読む。両経路で共通。"""
+        from hloc import localize_sfm
         # クエリ内部パラメータファイル（localize_sfm 用）
         queries_file = work / "queries.txt"
         with open(queries_file, "w") as f:

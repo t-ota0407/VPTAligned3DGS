@@ -1023,7 +1023,7 @@ Real CP の測定は 1 回きりで**全試行が道連れになる**ので、�
 
 **PC が遅いだけなら失敗しない**（処理が進んでいる限り待ち続ける）。ただし位置合わせに何分もかかる。
 
-**PC が遅い（1 枚に何秒もかかる）とき**: `start_demo.bat` のウインドウ（`received_demo/cv.log`）で `[cv]` の `新着 N 枚` の間隔を見る。以前の実験では 60 秒以内に確定していたので、1 枚あたり数秒以上かかっているなら GPU が使われていない可能性が高い。起動時の `[cv] … CUDA:` の行が `NOT available` ならそれが原因で、Windows に NVIDIA の最新ドライバを入れて `setup_windows.bat` を再実行する（CUDA 版の torch に入れ替わる）。WSL2 で直接確かめるなら:
+**PC が遅い（1 枚に何秒もかかる）とき**: `received_demo/cv.log`（GUI のイベント欄の `All`・`Open cv.log`）の `[localize] ローカライズ N 枚: X s（…）` を見る。GPU なら 1 枚あたり約 2.5 s（RTX 3070 Ti Laptop）で、1 枚あたり 10 s を超えるなら GPU が使われていない可能性が高い。起動時の `[cv] … CUDA:` の行が `NOT available` ならそれが原因で、Windows に NVIDIA の最新ドライバを入れて `setup_windows.bat` を再実行する（CUDA 版の torch に入れ替わる）。WSL2 で直接確かめるなら:
 ```bash
 nvidia-smi                                                     # GPU が見えるか
 ~/vptcv/bin/python -c "import torch; print(torch.cuda.is_available())"    # True であること

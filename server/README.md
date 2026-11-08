@@ -167,6 +167,8 @@ scene_data/example1/
 
 1. **オフライン（シーンごと 1 回・GPU）**: `sparse/0` ＋ `images/` から再ローカライズ DB を構築。DB 画像に SuperPoint を抽出 → 既存 COLMAP 姿勢で SuperPoint 点群を**再三角測量**（`.ply` と同座標系）→ NetVLAD 大域記述子。出力は `scene_data/<name>/hloc/`。
 2. **オンライン（キーフレームごと）**: 受信 JPEG → SuperPoint → NetVLAD 検索 → LightGlue マッチ → 2D-3D → `solvePnPRansac`（`K_for_image`）→ `T_{colmap←cam}`、カメラ中心 `C_c`。
+   **モデル（SuperPoint・NetVLAD・LightGlue）と DB（大域記述子・局所特徴）は起動時に読み込んだまま使い回す**（`cv/warm_hloc.py`）。hloc の main 関数は呼ぶたびにこれらを読み直すため、届いた分をまとめて処理する 1 回ごとに約 10 秒の固定費があった（RTX 3070 Ti Laptop・irt_short2 で、1 枚 14.1 s → 2.4 s、4 枚 18.9 s → 9.4 s）。残る 1 枚あたり約 2.4 s はほぼ LightGlue の照合（1 枚あたり検索上位 20 枚）。
+   計算は hloc と同じ（前処理・float16 への丸め・検索順・照合の入力の形まで合わせてある）。**`warm_hloc.py` か hloc の版を変えたら、WSL2 で `python -m vptserver.cv.check_warm --scene scene_data/<name> --keyframes received/session_<…>` を実行し、`ALL SAME` を確かめる**（検索ペア・照合・PnP のインライア数・推定姿勢を突き合わせる）。準備や処理に失敗したときは、警告を出して hloc の main を呼ぶ以前の経路に切り替える（`VPT_CV_PLAIN_HLOC=1` で常に以前の経路）。
 3. **集約**: 複数 KF の (`C_c`, Quest world 位置 `C_w`) を `solve_sim3_ransac` で Sim(3) 化（**反射固定 `handedness=-1`** → 負スケール）。
 4. **返送**: WSL2 の `localize` が `session/result_sim3.json` を書く → Windows の `run.py` が検知して type=3 を Quest:50002 へ返送 → `AlignmentManager.ApplySim3` が splatRoot に適用。
 
@@ -283,7 +285,9 @@ server/
       ├─ gates.py            品質ゲート（純粋関数）
       ├─ migrate_model.py    レガシー COLMAP モデルを新形式（rigs/frames 付き）へ移行
       ├─ hloc_db.py          オフライン DB 構築（SuperPoint 再三角測量 ＋ NetVLAD, GPU）
-      └─ localize.py         オンライン・ローカライズ（検索 → マッチ → PnP）＋ 自己テスト ＋ Sim(3)
+      ├─ localize.py         オンライン・ローカライズ（検索 → マッチ → PnP）＋ 自己テスト ＋ Sim(3)
+      ├─ warm_hloc.py        localize の高速経路: モデルと DB を読み込んだまま hloc と同じ計算をする
+      └─ check_warm.py       高速経路が hloc の main を呼ぶ経路と同じ結果を出すかの突き合わせ（WSL2）
 ```
 
 ### GUI
