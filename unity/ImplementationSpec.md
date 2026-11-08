@@ -40,7 +40,7 @@
 |---|---|
 | 監視先 | `--watch` は `run.py` の `--out` から決める（`wslpath` で変換。空白・日本語のパスもクォートして渡す） |
 | ディストリ | `--wsl-distro` → `launch_config.json`（setup が書く）→ CV の venv があるものを探す。**既定のディストリに CV 環境があるとは限らない**（作者の PC でも既定は Ubuntu-20.04、CV は Ubuntu-24.04） |
-| 終了の連動 | `localize` の標準入力をパイプでつなぎ、`--exit-on-stdin-eof` で EOF を見て終わる（`cv/lifecycle.py`）。`run.py` が強制終了されても残らない。正常終了ではパイプを閉じ、8 s で終わらなければ Linux 側の PID を kill |
+| 終了の連動 | `localize` の標準入力をパイプでつなぎ、`--exit-on-stdin-eof` で EOF を見て終わる（`cv/lifecycle.py`）。`run.py` が強制終了されても残らない。正常終了ではパイプを閉じ、8 s で終わらなければ Linux 側の PID を kill。**EOF の見張りは記述子を `os.read` で直接読み、`sys.stdin` 経由で待たない** — `sys.stdin.buffer.read()` で待つとそのロックを握り続け、hloc の DataLoader が fork した子が起動時の `sys.stdin.close()` で永遠に止まる（最初のキーフレームから先へ進まない。2026-11-08 に発生） |
 | 再起動 | 落ちたら 5 s 後に起動し直す。起動 30 s 以内に 3 回続けて落ちたら設定の問題として諦め、理由を出す。venv が無い（終了コード 3）ならすぐ諦めてセットアップを案内する |
 | 二重起動 | `<out>/cv_heartbeat.json`（ベースの生存信号）が 8 s 以内に更新されていれば、別の `localize` が処理中として起動しない。止まったら引き継ぐ |
 | 生存の判定 | ハートビートの古さは**ファイルの更新時刻（Windows の時計）**で測る。中の `t` は WSL の時計で、WSL2 はスリープ復帰後に数十秒〜分ずれる |

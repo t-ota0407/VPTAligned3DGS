@@ -123,6 +123,27 @@ def test_lifecycle():
     time.sleep(0.6)
     check(exited == [0], "猶予を過ぎても終わらなければ強制終了する（重い処理の途中でも残らない）")
 
+    # 見張りが標準入力で待っている間も sys.stdin を閉じられること。hloc の DataLoader が fork した子は
+    # 起動時に sys.stdin.close() を呼ぶので、見張りが sys.stdin のロックを握っていると子が永遠に止まる
+    # （キーフレームが 1 枚も処理されない。lifecycle.py の説明）
+    r, w = os.pipe()
+    saved = sys.stdin
+    sys.stdin = io.TextIOWrapper(io.BufferedReader(io.FileIO(r, closefd=False)))
+    try:
+        stop2 = threading.Event()
+        watcher = lifecycle.exit_when_parent_gone(stop2, Log(), grace_s=60, hard_exit=lambda code: None)
+        time.sleep(0.3)                                    # 見張りが読み込みで待つまで
+        closer = threading.Thread(target=sys.stdin.close, daemon=True)
+        closer.start()
+        closer.join(2.0)
+        check(not closer.is_alive(), "見張りが待っている間も sys.stdin を閉じられる（fork した子が詰まらない）")
+        os.close(w)                                        # 起動元が終わった
+        watcher.join(2.0)
+        check(stop2.is_set(), "標準入力の記述子を直接読んでも、EOF で停止の合図が立つ")
+    finally:
+        sys.stdin = saved
+        os.close(r)
+
 
 def test_restart_policy():
     print("== 再起動の方針 ==")

@@ -112,6 +112,7 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 | **公開前提: 作者の PC に依存しない**。WSL のディストリ名・パス・ユーザー名を決め打ちしない（既定のディストリに CV 環境があるとは限らない）。WSL 側の版を上げるときは `setup_wsl.sh` の先頭と `constraints-cv.txt` を同時に直し、実機で通す | `ImplementationSpec.md` §1 / `server/README.md`「セットアップ」 |
 | **`server/` の `.bat`・`.cmd` は ASCII＋CRLF、`( )` ブロックの中でパスを展開しない**（括弧入りのフォルダ名で壊れる）。日本語の案内は Python 側で出す。`setup_wsl.sh` は LF | `server/README.md`「構成」 |
 | **CV の生存（ハートビート）の古さはファイルの更新時刻で測る**（中の `t` は WSL の時計で、スリープ復帰後にずれる） | `ImplementationSpec.md` §1 |
+| **`localize` の中で `sys.stdin` を読んで待たない**（起動元の終了の見張りは記述子を `os.read` で読む）。hloc の DataLoader が fork した子が `sys.stdin.close()` で止まり、キーフレームが 1 枚も処理されなくなる | `ImplementationSpec.md` §1（終了の連動） |
 
 ---
 
