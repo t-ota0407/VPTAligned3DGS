@@ -464,7 +464,7 @@ public class AlignmentManager : MonoBehaviour
         if (splatRoot == null) return;
 
         // 表示トグルだけは実験中も使う（3DGS とパススルーを見比べるため）
-        if (OVRInput.GetDown(OVRInput.Button.Three)) ToggleSplatVisible();    // X: 3DGS表示/非表示
+        if (OVRInput.GetDown(OVRInput.Button.Three)) ToggleSplatVisible();    // X: 3DGS表示/非表示（人の操作 → OnUserToggledSplats）
 
         // 姿勢を変える操作は実験中は封じる。誤爆でその試行の測定が無効になるのを防ぎ、
         // 同じボタンを ExperimentController が試行操作に使えるようにする。
@@ -604,45 +604,85 @@ public class AlignmentManager : MonoBehaviour
     /// <summary>3DGS がいま表示されているか。</summary>
     public bool SplatVisible => _splatVisible;
 
-    public void ToggleSplatVisible() => SetSplatVisible(!_splatVisible);
+    /// <summary>人が X（または HUD の表示ボタン）で表示を切り替えたとき。
+    /// デモの自動フェード（DemoController）が「来場者が自分で切り替えた」と知って止まるのに使う。</summary>
+    public event System.Action OnUserToggledSplats;
 
-    /// <summary>3DGS の表示を明示的に切り替える（実験の局面に応じた自動制御に使う）。
-    /// 既に同じ状態なら何もしないので、毎フレーム呼んでも安全。</summary>
+    /// <summary>人の操作（X・HUD の表示ボタン）専用の切替。プログラムからの切替は
+    /// <see cref="SetSplatVisible"/> / <see cref="FadeInSplats"/> / <see cref="FadeOutSplats"/> を使う
+    /// （ここを通すと <see cref="OnUserToggledSplats"/> が鳴り、自動フェードが止まる）。</summary>
+    public void ToggleSplatVisible()
+    {
+        SetSplatVisible(!_splatVisible);
+        OnUserToggledSplats?.Invoke();
+    }
+
+    /// <summary>3DGS の表示を明示的に切り替える（実験の局面に応じた自動制御に使う）。即時。
+    /// 既に同じ状態なら何もしないので、毎フレーム呼んでも安全。
+    ///
+    /// **消すのはフェードアウトの途中でも即時**（合っている確信の無い姿勢を一瞬でも残さない。Specification.md §15.4-1）。
+    /// 出すほうはフェードインの途中なら続けさせる（出し直すと一瞬消えてちらつく）。</summary>
     public void SetSplatVisible(bool visible)
     {
-        if (_splatVisible == visible) return;
+        if (_splatVisible == visible && (visible || _fadeCo == null)) return;
         if (_fadeCo != null) { StopCoroutine(_fadeCo); _fadeCo = null; }   // フェード中の切替は即時で確定させる
         _splatVisible = visible;
-        if (splatController != null) { if (_splatVisible) splatController.Show(); else splatController.Hide(); }
+        if (splatController != null) ApplyOpacity(_splatVisible ? 1f : 0f);
         else if (splatRoot != null) splatRoot.gameObject.SetActive(_splatVisible); // フォールバック
         Debug.Log("[AlignmentManager] 3DGS visible = " + _splatVisible);
     }
 
     private Coroutine _fadeCo;
+    // いまシェーダに渡している不透明度。フェードを途中から逆向きにするとき、ここから始める（跳ねない）。
+    // GaussianSplatController.Awake が 1 に初期化するので、初期値も 1。
+    private float _opacity = 1f;
 
-    /// <summary>3DGS を不透明度 0 から徐々に表示する（デモで姿勢が確かめられた瞬間に使う）。
-    /// パッと出すより「現れた」ことが伝わり、来場者が見落としにくい。途中で X が押されたら打ち切る。</summary>
+    private void ApplyOpacity(float v)
+    {
+        _opacity = Mathf.Clamp01(v);
+        splatController.SetOpacity(_opacity);
+    }
+
+    /// <summary>3DGS を徐々に表示する（デモで姿勢が確かめられた瞬間・自動フェードの出す段）。
+    /// パッと出すより「現れた」ことが伝わり、来場者が見落としにくい。途中で X が押されたら打ち切る。
+    /// 今の不透明度から始める（フェードアウトの途中なら、そこから戻る）。</summary>
     public void FadeInSplats(float seconds)
     {
         if (_splatVisible) return;   // 既に出ている／フェード中（出し直すと一瞬消えてちらつく）
-        if (splatController == null || seconds <= 0f) { SetSplatVisible(true); return; }
-        _splatVisible = true;
-        splatController.SetOpacity(0f);
-        _fadeCo = StartCoroutine(FadeRoutine(seconds));
-        Debug.Log($"[AlignmentManager] 3DGS をフェードイン（{seconds:F1}s）");
+        FadeTo(true, seconds);
     }
 
-    private System.Collections.IEnumerator FadeRoutine(float seconds)
+    /// <summary>3DGS を徐々に消す（デモの自動フェードの消す段だけで使う）。
+    /// 合っている確信が無くなって消すときは、これではなく <see cref="SetSplatVisible"/>(false)（即時）を使う。
+    /// <see cref="SplatVisible"/> は呼んだ時点で false になる（行き先を返す）。</summary>
+    public void FadeOutSplats(float seconds)
     {
+        if (!_splatVisible) return;   // 既に消えている／フェードアウト中
+        FadeTo(false, seconds);
+    }
+
+    private void FadeTo(bool visible, float seconds)
+    {
+        if (splatController == null || seconds <= 0f) { SetSplatVisible(visible); return; }
+        if (_fadeCo != null) { StopCoroutine(_fadeCo); _fadeCo = null; }
+        _splatVisible = visible;
+        _fadeCo = StartCoroutine(FadeRoutine(visible, seconds));
+    }
+
+    private System.Collections.IEnumerator FadeRoutine(bool visible, float seconds)
+    {
+        float from = _opacity, to = visible ? 1f : 0f;
+        // 途中から逆向きにしたときも同じ速さに見えるよう、残りの量に比例した時間をかける
+        float duration = seconds * Mathf.Abs(to - from);
         float t = 0f;
-        while (t < seconds)
+        while (t < duration)
         {
-            if (!_splatVisible) { _fadeCo = null; yield break; }
-            splatController.SetOpacity(Mathf.SmoothStep(0f, 1f, t / seconds));
+            if (_splatVisible != visible) { _fadeCo = null; yield break; }
+            ApplyOpacity(Mathf.SmoothStep(from, to, t / duration));
             t += Time.unscaledDeltaTime;
             yield return null;
         }
-        if (_splatVisible) splatController.Show();
+        if (_splatVisible == visible) ApplyOpacity(to);
         _fadeCo = null;
     }
 

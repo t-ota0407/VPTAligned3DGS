@@ -968,7 +968,6 @@ MonoBehaviour:
   splatRoot: {fileID: 1609192435}
   headAnchor: {fileID: 759022376}
   udpManager: {fileID: 1332137796}
-  sendDebugOverUdp: 0
   splatController: {fileID: 1332137797}
   startHidden: 1
   moveSpeed: 0.6
@@ -1028,8 +1027,6 @@ MonoBehaviour:
   requestedResolution: {x: 1280, y: 1280}
   logStatus: 1
   logIntervalSec: 1
-  sendStatusOverUdp: 0
-  udpManager: {fileID: 1332137796}
 --- !u!114 &1332137801
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1093,12 +1090,31 @@ MonoBehaviour:
   restoreWaitS: 30
   reverifyGraceS: 0.5
   fadeInS: 0.5
+  autoFadeOnStart: 0
+  autoFadeShownS: 5
+  autoFadeHiddenS: 3
+  autoFadeS: 1.5
   resetSettleS: 1
   saveTimeoutS: 40
-  staffComboHoldS: 3
+  collectTargetAccepted: 24
+  collectMaxS: 60
+  topUpAccepted: 6
+  topUpMaxS: 30
+  maxTopUps: 3
+  backlogPauseAt: 4
+  backlogResumeAt: 1
+  inFlightS: 2.5
+  resultGraceS: 2.5
+  waitStallS: 30
+  busyNoProgressFailS: 900
+  pcLostFailS: 10
+  cvStartWaitS: 120
+  cvBusyHangS: 300
+  staffComboHoldS: 2
+  staffHintOnEntryS: 10
   clearHoldS: 3
   tapMaxS: 0.8
-  experimentSwitchHoldS: 3
+  experimentSwitchHoldS: 2
 --- !u!21 &1347759168
 Material:
   serializedVersion: 8

@@ -83,6 +83,7 @@ public partial class AlignmentHud
                           (demo.LastSaveFailed ? "Not saved — will be lost after a restart"
                            : forced ? "Anchors did not cross-check — check the overlay by eye"
                            : SavedSummary(an))
+                          + (demo.AutoFadeHeld ? "  ·  auto fade paused by X" : "")
                           + "  ·  " + Btn("Y+B") + " hold: close");
                 break;
             case DemoController.DemoState.Manual:
@@ -162,7 +163,7 @@ public partial class AlignmentHud
     ///
     /// **3 行目にスタッフパネルの開き方（Y＋B 長押し）を出す**（スタッフも忘れるので UI に書く）。
     /// 出すのはスタッフが要る場面だけ（<see cref="DemoController.ShowStaffHint"/>）。
-    /// Y＋B を押している間は案内を差し替えて残り時間を出す（3 秒は無反応だと効いているか分からない）。
+    /// Y＋B を押している間は案内を差し替えて残り時間を出す（2 秒でも無反応だと効いているか分からない）。
     /// 文字列の組み立ては 10Hz（主パネルと同じ理由: 毎フレームだと GC で 72fps を削る）、追従は毎フレーム。</summary>
     private void UpdateVisitorHint()
     {
@@ -255,8 +256,9 @@ public partial class AlignmentHud
         BuildVisitorHint();
     }
 
-    /// <summary>デモのスタッフ用ボタン。**2 列 3 行＋全幅 1 行**（割当タグを添えるので 3 列だと文字が隣へはみ出す）。
-    /// 手動調整中は A が AlignmentManager の Lock（保存）に取られるので、ラベルもそれに合わせて変える。</summary>
+    /// <summary>デモのスタッフ用ボタン。**2 列 4 行＋全幅 1 行**（割当タグを添えるので 3 列だと文字が隣へはみ出す）。
+    /// 手動調整中は A が AlignmentManager の Lock（保存）に取られるので、ラベルもそれに合わせて変える。
+    /// 行を足したら BuildUi のパネルの高さ（デモ）も直す。</summary>
     private void BuildDemoButtons(RectTransform crt, float y, float inner)
     {
         const float H = 40f, G = 8f;
@@ -295,6 +297,19 @@ public partial class AlignmentHud
                     () => demo.SetStaffMode(false), 15,
                     () => "Close" + Key("Y+B hold"),
                     () => !demo.InManual, alBtn);
+        y -= H + G;
+        // 自動フェード（表示中に 3DGS を出し入れし続ける）。来場者が X で止めていれば「再開」になる
+        AddButtonAt(crt, new Vector2(xl, y), new Vector2(w, H), null,
+                    () => demo.ToggleAutoFade(), 15,
+                    () => (demo.AutoFadeHeld ? "Resume auto fade"
+                           : demo.AutoFadeOn ? "Auto fade: on" : "Auto fade: off") + Key("R trigger"),
+                    () => demo.CanToggleAutoFade, c);
+        // パネルだけ隠す（スタッフモードのまま。もう一度右グリップで出す）。隠れたパネルは突けないので、
+        // ここで押せるのは「隠す」だけ
+        AddButtonAt(crt, new Vector2(xr, y), new Vector2(w, H), null,
+                    () => demo.ToggleStaffPanel(), 15,
+                    () => "Hide panel" + Key("R grip"),
+                    null, alBtn);
         y -= H + G;
         // 実験へ戻る（実験の最初の画面からデモへ入る操作と同じ割当。保存した位置合わせは残る）
         AddButtonAt(crt, new Vector2(0f, y), new Vector2(inner, H), null,

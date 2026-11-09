@@ -88,7 +88,7 @@ public class ExperimentController : MonoBehaviour
     [Tooltip("左右のスティックを同時にこの秒数押し込むと、デモ展示モード（DemoScene）へ切り替える。\n" +
              "デモは CP の設定も先端校正も要らないので、最初の画面からそのまま入れる。\n" +
              "この画面ではスティック押込に他の役割が無い（姿勢操作は封じられている）ので衝突しない。")]
-    [SerializeField] private float demoSwitchHoldS = 3f;
+    [SerializeField] private float demoSwitchHoldS = 2f;
 
     private readonly AppMode.SticksHold _demoHold = new AppMode.SticksHold();
 

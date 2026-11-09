@@ -29,7 +29,9 @@ using UnityEngine;
 ///   来場者      : X = 3DGS の表示切替（AlignmentManager が受ける）。他は何もしない。
 ///   Y＋B 長押し : スタッフパネルの開閉（手動調整中は不可。先に Y で取り消すか A で確定する）
 ///   スタッフ    : A = Re-align / Cancel、A 長押し = 保存の消去、B = Show anyway、Y = 手動調整、
-///                 両スティック押込 3 秒 = 実験へ戻る（実験の最初の画面からデモへ入る操作と同じ。[[AppMode]]）
+///                 右トリガー = 自動フェード（表示中に 3DGS を出し入れし続ける。[[AutoFadeCycle]]）の ON/OFF、
+///                 右グリップ = スタッフパネルを隠す／出す（スタッフモードのまま。ボタンは効いたまま）、
+///                 両スティック押込 2 秒 = 実験へ戻る（実験の最初の画面からデモへ入る操作と同じ。[[AppMode]]）
 ///   手動調整中  : スティック / トリガー / A（Lock して保存）は AlignmentManager、Y = 取り消し。
 ///                 B（初期姿勢へ戻す）は無効（AlignmentManager.ResetButtonEnabled=false）
 /// </summary>
@@ -70,6 +72,17 @@ public class DemoController : MonoBehaviour
     [SerializeField] private float reverifyGraceS = 0.5f;
     [Tooltip("表示するときのフェードイン[s]。")]
     [SerializeField] private float fadeInS = 0.5f;
+
+    [Header("Auto fade（表示中に 3DGS を出し入れし続ける。スタッフパネルの右トリガーで ON/OFF）")]
+    [Tooltip("デモに入った時点で自動フェードを ON にしておくか。")]
+    [SerializeField] private bool autoFadeOnStart = false;
+    [Tooltip("自動フェードで 3DGS を出しておく時間[s]（フェードインの時間を含む）。要実機調整。")]
+    [SerializeField] private float autoFadeShownS = 5f;
+    [Tooltip("自動フェードで 3DGS を消しておく時間[s]（フェードアウトの時間を含む。実物だけを見せる時間）。要実機調整。")]
+    [SerializeField] private float autoFadeHiddenS = 3f;
+    [Tooltip("自動フェードの 1 回のフェードにかける時間[s]。ゆっくり溶けるほうが重なり方が分かりやすい。" +
+             "出す段・消す段より長い値は、その長さに切り詰める。")]
+    [SerializeField] private float autoFadeS = 1.5f;
 
     [Header("Re-align")]
     [Tooltip("RESET 送信後、PC が新セッションを作るのを待つ時間[s]（ExperimentController.resetSettleS と同じ理由）。")]
@@ -128,7 +141,7 @@ public class DemoController : MonoBehaviour
 
     [Header("Staff input")]
     [Tooltip("スタッフパネルの開閉: Y（左）と B（右）を同時にこの秒数押し続ける。来場者が偶然押さない組み合わせ。")]
-    [SerializeField] private float staffComboHoldS = 3f;
+    [SerializeField] private float staffComboHoldS = 2f;
     [Tooltip("デモに入ってからこの秒数は、来場者向けの案内にスタッフパネルの開き方を出す。\n" +
              "デモに切り替えた本人（＝スタッフ）が読むため。スタッフも Y＋B を忘れるので UI に書く。")]
     [SerializeField] private float staffHintOnEntryS = 10f;
@@ -138,7 +151,7 @@ public class DemoController : MonoBehaviour
     [SerializeField] private float tapMaxS = 0.8f;
     [Tooltip("スタッフパネルを開いている間に左右のスティックを同時にこの秒数押し込むと、実験（GSTestScene）へ戻る。\n" +
              "実験側からデモへ入る操作と同じ（ExperimentController.demoSwitchHoldS）。")]
-    [SerializeField] private float experimentSwitchHoldS = 3f;
+    [SerializeField] private float experimentSwitchHoldS = 2f;
 
     private readonly AppMode.SticksHold _experimentHold = new AppMode.SticksHold();
 
@@ -162,11 +175,17 @@ public class DemoController : MonoBehaviour
     private PressTracker _a, _b, _y;                       // tapMaxS が決まる Awake で作る
     private readonly PressTracker _combo = new PressTracker();   // Y＋B 同時押し
 
+    // ---- 自動フェード（判定は AutoFadeCycle、ここは AlignmentManager に渡すだけ） ----
+    private readonly AutoFadeCycle _autoFade = new AutoFadeCycle();
+
     // ================= 公開状態（HUD 用） =================
 
     public DemoState State => _state;
-    /// <summary>スタッフパネルを開いているか。</summary>
+    /// <summary>スタッフパネルを開いているか（隠していても true。→ <see cref="StaffPanelHidden"/>）。</summary>
     public bool  StaffMode => _staff;
+    /// <summary>スタッフモードのまま、パネルだけ隠しているか（右グリップ）。</summary>
+    public bool  StaffPanelHidden => _staff && _panelHidden;
+    private bool _panelHidden;
     public float StateElapsedS => Time.realtimeSinceStartup - _stateT;
     public AnchorPersistence Anchors => anchors;
 
@@ -194,6 +213,13 @@ public class DemoController : MonoBehaviour
     /// <summary>実験へ戻れるか。スタッフパネルを開いていて、作業（再位置合わせ・保存・手動調整）の途中でないとき。
     /// 手動調整中はスティック押込が呼び寄せ・水平化に取られている。</summary>
     public bool CanSwitchToExperiment => _staff && Idle && !_busy;
+
+    /// <summary>自動フェードを切り替えられるか。手動調整中は右トリガーがスケールに取られているので受け付けない。</summary>
+    public bool CanToggleAutoFade => _state != DemoState.Manual;
+    /// <summary>自動フェードが ON か（表示中でなければ ON でも回らない）。</summary>
+    public bool AutoFadeOn => _autoFade.Enabled;
+    /// <summary>ON だが、来場者（または HUD）が X で切り替えたので次の装着まで止めているか。</summary>
+    public bool AutoFadeHeld => _autoFade.Enabled && _autoFade.HeldByUser;
 
     /// <summary>再位置合わせできない理由（HUD 用・英語）。できるなら空。
     /// 処理中フラグが立っているのに生存信号が古い（＝長い処理の最中）ときを「CV 停止」と書かない。</summary>
@@ -382,9 +408,11 @@ public class DemoController : MonoBehaviour
         if (align != null)
         {
             align.OnAutoAligned += OnAutoAligned;
+            align.OnUserToggledSplats += OnUserToggledSplats;
             align.AcceptAutoResults = false;         // 再位置合わせを始めるまで受け付けない
             align.ResetButtonEnabled = false;        // 初期姿勢は展示では無意味。手動調整中の Y＋B で姿勢が飛ぶのも防ぐ
         }
+        _autoFade.SetEnabled(autoFadeOnStart);
         if (uploader != null)
         {
             uploader.ManualGripEnabled = false;      // 左グリップは来場者が握るので送信に使わない
@@ -410,7 +438,7 @@ public class DemoController : MonoBehaviour
     private void OnDestroy()
     {
         if (anchors != null) anchors.OnSaveFinished -= OnSaveFinished;
-        if (align != null) align.OnAutoAligned -= OnAutoAligned;
+        if (align != null) { align.OnAutoAligned -= OnAutoAligned; align.OnUserToggledSplats -= OnUserToggledSplats; }
         if (tracking != null) tracking.OnOriginChanged -= OnOriginChanged;
         OVRManager.HMDMounted   -= OnHmdMounted;
         OVRManager.HMDUnmounted -= OnHmdUnmounted;
@@ -476,6 +504,22 @@ public class DemoController : MonoBehaviour
                     if (anchors != null) anchors.SaveNow("manual");
                 }
                 break;
+        }
+
+        UpdateAutoFade();
+    }
+
+    /// <summary>自動フェードを進める。回すのは表示中（確かめ直しの途中でない）だけ — 合っている確信の無い局面では
+    /// 回さず、表示は <see cref="Enter"/> が即時で決める（Specification.md §15.4-1）。状態遷移の後に呼ぶ。</summary>
+    private void UpdateAutoFade()
+    {
+        bool canRun = _state == DemoState.Showing && !_reverifyPending;
+        // フェードが段より長いと、出し切る・消し切る前に次の段へ移ってしまう
+        float fade = Mathf.Min(autoFadeS, autoFadeShownS, autoFadeHiddenS);
+        switch (_autoFade.Tick(canRun, Time.unscaledDeltaTime, autoFadeShownS, autoFadeHiddenS))
+        {
+            case AutoFadeCycle.Command.FadeOut: align.FadeOutSplats(fade); break;
+            case AutoFadeCycle.Command.FadeIn:  align.FadeInSplats(fade);  break;   // 既に出ていれば何もしない
         }
     }
 
@@ -543,7 +587,13 @@ public class DemoController : MonoBehaviour
             }
         }
 
-        if (!_staff) return;   // 来場者の間は A/B/Y に何も割り当てない（X は AlignmentManager が受ける）
+        // 右グリップ: スタッフパネルを隠す／出す。押下の端は来場者の間も追い続ける
+        // （握ったままスタッフパネルを開いたとき、開いた瞬間に隠れないように）
+        bool rgEdge = RightGripPressedEdge();
+
+        if (!_staff) return;   // 来場者の間は A/B/Y・右グリップに何も割り当てない（X は AlignmentManager が受ける）
+
+        if (rgEdge) ToggleStaffPanel();   // 手動調整中も使える（隠して重なりを確かめる）
 
         // 両スティック長押し: 実験へ戻る（スタッフパネルを開いているときだけ）
         if (_experimentHold.Update(experimentSwitchHoldS))
@@ -570,6 +620,8 @@ public class DemoController : MonoBehaviour
         }
         if (_b.Tapped) { if (CanShowAnyway) ShowAnyway(); else RejectPulse(); }
         if (_y.Tapped) { if (CanManual) ToggleManual(); else RejectPulse(); }
+        // 右トリガー: 自動フェード。来場者の間は何もしない（来場者に残す入力は X だけ）。手動調整中は上で return 済み（スケール）
+        if (OVRInput.GetDown(OVRInput.RawButton.RIndexTrigger)) ToggleAutoFade();
     }
 
     // ================= スタッフ操作（HUD のボタンからも呼ぶ） =================
@@ -579,8 +631,49 @@ public class DemoController : MonoBehaviour
         if (_staff == on) return;
         if (!on && _state == DemoState.Manual) ToggleManual();   // 手動調整を開いたまま来場者に渡さない
         _staff = on;
+        _panelHidden = false;   // 開いたら必ずパネルを出す（前に隠したまま閉じても、次は見える）
         Pulse(0.6f);
         Debug.Log("[DemoController] staff mode = " + on);
+    }
+
+    /// <summary>スタッフパネルを隠す／出す（右グリップ・パネルの `Hide panel`）。スタッフモードは続き、
+    /// ボタンの割当もそのまま効く。3DGS を遮らずに重なりや自動フェードを確かめるため。
+    /// 来場者向けの案内はスタッフモードの間は出ないので、隠すと何も表示されなくなる。</summary>
+    public void ToggleStaffPanel()
+    {
+        if (!_staff) return;
+        _panelHidden = !_panelHidden;
+        Pulse(0.3f);
+        Debug.Log("[DemoController] staff panel " + (_panelHidden ? "hidden" : "shown"));
+    }
+
+    // 右グリップは軸（0..1）なので、押した・離したをヒステリシスで判定する（AlignmentHud の実験側と同じ値）
+    private bool _rgDown;
+    private bool RightGripPressedEdge()
+    {
+        float rg = OVRInput.Get(OVRInput.RawAxis1D.RHandTrigger);
+        if (!_rgDown && rg >= 0.8f) { _rgDown = true; return true; }
+        if (_rgDown && rg < 0.5f) _rgDown = false;
+        return false;
+    }
+
+    /// <summary>自動フェード（表示中に 3DGS を出し入れし続ける）の ON/OFF。
+    /// ON のまま来場者が X で止めていたら、OFF にせず再開する（パネルのラベルも `Resume auto fade`）。</summary>
+    public void ToggleAutoFade()
+    {
+        if (!CanToggleAutoFade) { RejectPulse(); return; }
+        if (AutoFadeHeld)
+        {
+            _autoFade.SetEnabled(true);
+            SetNotice("Auto fade resumed");
+        }
+        else
+        {
+            _autoFade.SetEnabled(!_autoFade.Enabled);
+            SetNotice(_autoFade.Enabled ? "Auto fade on — the 3D scene fades out and back in while shown"
+                                        : "Auto fade off");
+        }
+        Pulse(0.4f);
     }
 
     /// <summary>実験（GSTestScene）へ戻る。保存した位置合わせはそのまま残り、次にデモへ入ったときに復元される。</summary>
@@ -825,8 +918,19 @@ public class DemoController : MonoBehaviour
 
     private void OnHmdMounted()
     {
-        // 次の来場者がかぶった。前の来場者が X で消したままなら、確かめてから出し直す
+        // 次の来場者がかぶった。前の来場者が X で消したままなら、確かめてから出し直す。
+        // 前の来場者が X で止めた自動フェードも再開する（確かめ直しが通ってから回り始める）
+        _autoFade.NewWearer();
         if (_state == DemoState.Showing) BeginReverify(show: true);
+    }
+
+    /// <summary>X（または HUD の表示ボタン）で人が表示を切り替えた。自動フェードを回している最中なら、
+    /// 押した結果を残すため次の装着まで止める（回し続けると数秒で上書きされ、X が壊れたように見える）。</summary>
+    private void OnUserToggledSplats()
+    {
+        if (!_autoFade.Running) return;   // 回っていない局面（再位置合わせ中に X で覗く など）では止めない
+        _autoFade.UserToggled();
+        Debug.Log("[DemoController] X で表示が切り替えられたので、自動フェードを次の装着まで止めます");
     }
 
     private void OnHmdUnmounted()

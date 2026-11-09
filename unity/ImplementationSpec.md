@@ -92,6 +92,7 @@ unity/projects/VPTAligned3DGS/Assets/
 │  ├─ AlignmentHud(.Experiment/.Demo/.Layout)  ヘッドセット内 HUD（partial クラス。実験 / 簡易 / デモ）
 │  ├─ Demo/DemoController    デモ展示モードの進行（§14）
 │  ├─ Demo/RealignMonitor    再位置合わせ（集める → 待つ → 足す）の判定。PONG と時刻だけを入力にする（§14）
+│  ├─ Demo/AutoFadeCycle     自動フェード（表示中に 3DGS を出し入れし続ける）の判定（§14.5b）
 │  └─ Experiment/            評価実験一式（§9）
 └─ Editor/ControlPointToolWindow.cs        Virtual CP の配置・JSON 取り込み
 ```
@@ -358,6 +359,8 @@ Real CP の測定中に非表示にするのは見た目の問題ではなく**�
 
 `GaussianSplatController` のグローバル不透明度の初期化は **`Start` ではなく `Awake`** で行う（`Start` どうしの実行順は不定で、非表示にした直後に 1 で上書きされうる）。
 
+表示の API（`AlignmentManager`）: `SetSplatVisible` は即時（**消すのはフェードの途中でも即時**）。`FadeInSplats` / `FadeOutSplats` は今の不透明度から徐々に変える（デモの表示開始と自動フェード。§14.5b）。`ToggleSplatVisible` は人の操作（X・HUD の表示ボタン）専用で、`OnUserToggledSplats` を鳴らす。
+
 ---
 
 ## 7. 永続化（空間アンカー）
@@ -591,9 +594,9 @@ Sim(3) は「Quest ワールドは固定」を前提にする。しかし原点�
 | 更新レート | 10 Hz | 毎フレーム文字列を作ると GC で 72fps を削る |
 | 追従 | 視線から 24° 外れたときだけ滑らかに追従。**手を近づけている間は動かない** | Poke するボタンが逃げないように |
 | パネル高 `h`（デモ） | 628 px | 指標行の下に罫線＋チェック行（40）＋ボタン 2 列 3 行＋全幅 1 行（実験へ戻る）。最下段の下端（上から 546）と診断行の罫線（上から 568）の間に 22px |
-| 実験パネルの最下段 | `Show/Hide splats [X]` と `Demo mode [both sticks hold]` を半分ずつ | デモへの入口。行を足さずに割ったので実験パネルの高さ（688）は変えていない。`NeedsSetup` の指標行にも `Demo without CPs: hold both sticks for 3 s` を出す |
+| 実験パネルの最下段 | `Show/Hide splats [X]` と `Demo mode [both sticks hold]` を半分ずつ | デモへの入口。行を足さずに割ったので実験パネルの高さ（688）は変えていない。`NeedsSetup` の指標行にも `Demo without CPs: hold both sticks for 2 s` を出す |
 | 来場者向け案内（デモ） | 560×124 px・3 行（案内 28px / 補足 17px / スタッフ向け 14px）・頭の前 `hintDistanceM` 1.0m・`hintDownOffsetM` 0.12m 下・減衰 5/s で視線に追従。文言の組み立ては 10Hz | 見回してもらうのが目的なので、主パネルのような「置いてある」追従ではなく常に視界に入れる |
-| スタッフ向けの行（デモ） | `Staff: hold Y + B together for 3 s to open the staff panel`。**スタッフが要る場面だけ**（`DemoController.ShowStaffHint`: デモに入って `staffHintOnEntryS` 以内・`NeedsAlignment`・`Aligning`・`Relocating` が `restoreWaitS` を超えたとき）。Y＋B を押している間は案内ごと `Opening the staff panel…` と残り秒数に差し替える | スタッフも Y＋B を忘れるので UI に書く。ただし表示中（来場者が見ている間）は出さない — 開き方が来場者に知れると、パネルの奥の操作（手動調整して保存・保存の消去）に手が届く。3 秒の長押しは無反応だと効いているか分からないので進み具合を出す |
+| スタッフ向けの行（デモ） | `Staff: hold Y + B together for 2 s to open the staff panel`。**スタッフが要る場面だけ**（`DemoController.ShowStaffHint`: デモに入って `staffHintOnEntryS` 以内・`NeedsAlignment`・`Aligning`・`Relocating` が `restoreWaitS` を超えたとき）。Y＋B を押している間は案内ごと `Opening the staff panel…` と残り秒数に差し替える | スタッフも Y＋B を忘れるので UI に書く。ただし表示中（来場者が見ている間）は出さない — 開き方が来場者に知れると、パネルの奥の操作（手動調整して保存・保存の消去）に手が届く。2 秒の長押しでも無反応だと効いているか分からないので進み具合を出す |
 
 ### 10.5 デモ展示（`DemoController`）
 
@@ -605,9 +608,12 @@ Sim(3) は「Quest ワールドは固定」を前提にする。しかし原点�
 | `restoreWaitS` | 30 | s | 見つからなければスタッフ操作待ち（`NeedsAlignment`）へ。裏では探し続ける |
 | `reverifyGraceS` | 0.5 | s | 原点の移動・スリープ復帰のあと、多数決が揃わないままこの秒数で非表示（`Relocating`） |
 | `fadeInS` | 0.5 | s | 表示のフェードイン |
+| `autoFadeOnStart` | false | — | デモに入った時点で自動フェード（§14.5b）を ON にしておくか。展示中はスタッフパネルの右トリガーで切り替える |
+| `autoFadeShownS` / `autoFadeHiddenS` | 5 / 3 | s | 自動フェードで 3DGS を出しておく / 消しておく時間（どちらもフェードの時間を含む） |
+| `autoFadeS` | 1.5 | s | 自動フェードの 1 回のフェード。出す段・消す段より長ければその長さに切り詰める |
 | `resetSettleS` | 1.0 | s | RESET 後、PC が新セッションを切るのを待つ（§10.3 と同じ理由） |
 | `saveTimeoutS` | 40 | s | 保存が返らなければ失敗扱いで表示へ |
-| `staffComboHoldS` | 3 | s | Y＋B 同時長押しでスタッフパネルの開閉 |
+| `staffComboHoldS` | 2 | s | Y＋B 同時長押しでスタッフパネルの開閉 |
 | `staffHintOnEntryS` | 10 | s | デモに入ってからこの秒数は、来場者向け案内にスタッフパネルの開き方を出す（切り替えた本人が読む） |
 | `collectTargetAccepted` | 24 | 枚 | 再位置合わせ: PC の**採用**枚数（`cv_ok`）がこれに達したら送信を止めて待つ。PC の解き直しの範囲（`window`）と揃える |
 | `collectMaxS` | 60 | s | 最初の収集の上限。**実際に送信していた時間**で数える（PC 待ちの一時停止は数えない） |
@@ -624,8 +630,8 @@ Sim(3) は「Quest ワールドは固定」を前提にする。しかし原点�
 | `cvBusyHangS` | 300 | s | 古い localize（処理中に生存信号を書かない版）との互換: 処理中フラグのまま生存信号がこれだけ古ければ固まったとみなす |
 | `clearHoldS` | 3 | s | A 長押しで保存の消去（スタッフパネルを開いている間だけ） |
 | `tapMaxS` | 0.8 | s | これより短い押下を短押しとみなす |
-| `experimentSwitchHoldS` | 3 | s | スタッフパネルを開いている間、両スティック押込でこの秒数 → 実験へ戻る |
-| `ExperimentController.demoSwitchHoldS` | 3 | s | 実験の画面で両スティック押込をこの秒数 → デモへ |
+| `experimentSwitchHoldS` | 2 | s | スタッフパネルを開いている間、両スティック押込でこの秒数 → 実験へ戻る |
+| `ExperimentController.demoSwitchHoldS` | 2 | s | 実験の画面で両スティック押込をこの秒数 → デモへ |
 
 ---
 
@@ -698,7 +704,7 @@ CV の自動起動は作者の PC で確認済み（2026-10）: 既定でない�
 
 - **シーン**: `DemoScene.unity`。`GSTestScene` を複製し、実験用コンポーネント（`ExperimentController` / `ExperimentLogger` / `ControlPointMeasure` / `ControlPointEdit` / `ControllerTipCalibration`）と `ControlPoints` を外して `DemoController` と `TrackingOriginWatcher` を足したもの。`AnchorPersistence` は `experimentMode=false` / `restoreOnStart=true` / `anchorCount=3` / `fileKey=vptalign_demo`。
 - **同じ APK**: Scene List は `GSTestScene`（先頭＝起動時）と `DemoScene`。切替は `AppMode`（`SceneManager.LoadScene(Single)`）。
-  - **実験 → デモ**: 実験の画面で**両スティック押込を 3 秒**（`ExperimentController.demoSwitchHoldS`）、または HUD の `Demo mode`。この画面ではスティック押込に他の役割が無い（`PoseControls=Locked`）。CP の設定も先端校正も要らない。
+  - **実験 → デモ**: 実験の画面で**両スティック押込を 2 秒**（`ExperimentController.demoSwitchHoldS`）、または HUD の `Demo mode`。この画面ではスティック押込に他の役割が無い（`PoseControls=Locked`）。CP の設定も先端校正も要らない。
   - **デモ → 実験**: スタッフパネルを開いて同じ操作（`DemoController.experimentSwitchHoldS`）、または `Back to experiment mode`。
   - **切り替えを受け付けない局面**（実験側 `DemoSwitchBlockReason`）: 試行中・測量中・Virtual CP 編集中・先端校正中、および**測り直しの効かない記録（Real CP の実測・Virtual CP の編集・試行）が PC に未送達のとき**（outbox はシーンと一緒に消える。端末内 JSONL には残る）。**送信待ちがあるだけでは止めない** — 起動時の `session_start` 等は PC の ACK を待って常に残っており、PC を起動していないとデモへ永遠に入れなくなる（Editor で判明）。デモ側は再位置合わせ・保存・手動調整の途中を受け付けない。
 - **保存の分離**: `persistentDataPath` は共通なので、デモの保存ファイル名を `vptalign_demo_<modelId>.json` に分ける（§7.1）。実験は永続化を `Awake` で止め、空間アンカーも作らないので、実験の試行開始の `ClearSaved()` はデモの保存にもアンカーにも触れない。
@@ -711,7 +717,7 @@ CV の自動起動は作者の PC で確認済み（2026-10）: 既定でない�
 | 状態 | 3DGS | 来場者向け案内 | 抜ける条件 |
 |---|---|---|---|
 | `Locating` | 非表示 | 3s 後 `Look around the room` | 多数決が揃う → `Showing` / 保存なし・別モデル → `NeedsAlignment` / `restoreWaitS` 経過 → `NeedsAlignment`（裏では探し続ける） |
-| `Showing` | フェードイン | なし | 原点の移動・スリープ復帰・装着で確かめ直し。`reverifyGraceS` 以内に揃わなければ → `Relocating` |
+| `Showing` | フェードイン（自動フェードが ON なら出し入れを繰り返す。§14.5b） | なし | 原点の移動・スリープ復帰・装着で確かめ直し。`reverifyGraceS` 以内に揃わなければ → `Relocating` |
 | `Relocating` | 非表示 | 1s 後 `Look around the room` | 揃う → `Showing` |
 | `NeedsAlignment` | 非表示 | `Please ask a staff member` | 揃う（遅れて見つかった）→ `Showing` / スタッフ操作 |
 | `Aligning` | 非表示（X で覗ける） | `Aligning…`＋`Walk slowly around the room · 12 / 24` / 待機中は `Computing on the PC — you can stop walking` | `OnAutoAligned` → `Saving` / キャンセル → 保存済みの姿勢へ戻る / 足しても確定しない・PC が途切れた → 理由を出して保存済みの姿勢へ戻る（§14.4） |
@@ -774,19 +780,32 @@ CV の自動起動は作者の PC で確認済み（2026-10）: 既定でない�
 | 入力 | 来場者 | スタッフパネル | 手動調整中 |
 |---|---|---|---|
 | X | 3DGS の表示切替 | ← | ← |
-| Y＋B 同時 3s | スタッフパネルを開く | 閉じる | 無効（先に Y で取り消すか A で確定する） |
+| Y＋B 同時 2s | スタッフパネルを開く | 閉じる | 無効（先に Y で取り消すか A で確定する） |
 | A 短押し | — | Re-align / Cancel re-align | Lock して保存（`AlignmentManager`） |
 | A 長押し 3s | — | 保存の消去 | — |
 | B 短押し | — | Show anyway（見つかっているが一致しないとき） | 無効（`AlignmentManager.ResetButtonEnabled=false`。初期姿勢は Editor 上の置き場所で展示では無意味なうえ、Y＋B を試すと押した瞬間に調整中の姿勢が飛ぶため） |
 | Y 短押し | — | 手動調整を始める | 取り消す |
-| 両スティック押込 3s | — | 実験へ戻る（`AppMode.LoadExperiment`） | 無効（スティック押込は呼び寄せ・水平化） |
+| 右トリガー | — | 自動フェードの ON/OFF（来場者が X で止めていたら再開。§14.5b） | スケール（`AlignmentManager`） |
+| 両スティック押込 2s | — | 実験へ戻る（`AppMode.LoadExperiment`） | 無効（スティック押込は呼び寄せ・水平化） |
 | スティック / トリガー / スティック押込 | — | — | 移動・ヨー・スケール・呼び寄せ・水平化（`AlignmentManager`） |
-| 左右グリップ | 何もしない（`KeyframeUploader.ManualGripEnabled=false`・HUD の右グリップトグルも無効） | ← | ← |
+| 左グリップ | 何もしない（`KeyframeUploader.ManualGripEnabled=false`） | ← | ← |
+| 右グリップ | 何もしない（実験の HUD トグルも無効） | スタッフパネルを隠す／出す（`DemoController.ToggleStaffPanel`。スタッフモードのまま、ボタンの割当も効いたまま。開き直すと必ず出る） | ← |
 
-- 来場者が触れる状態では `PoseControls=Locked`（X だけが残る）。左右のグリップに何も割り当てないのは、来場者が握ったまま操作するため。
+- 来場者が触れる状態では `PoseControls=Locked`（X だけが残る）。来場者の間、左右のグリップに何も割り当てないのは、来場者が握ったまま操作するため（右グリップはスタッフパネルを開いている間だけ効く。押したまま開いても、その押下では隠れない）。
+- スタッフパネルを隠している間は何も表示されない（来場者向けの案内はスタッフモードの間は出さない）。3DGS を遮らずに重なりや自動フェードを確かめるため。ヘッドセットを外すとスタッフモードごと閉じる（§14.3）。
 - HUD のスタッフパネルの全ボタンに上表の物理割当がある。「Clear saved」は Poke では実行せず、A 長押しを案内するだけ（元に戻せないため）。
-- **スタッフパネルの開き方（Y＋B 3 秒）は来場者向け案内の 3 行目に出す**（スタッフが要る場面だけ。§10.4）。押している間は残り秒数を出す。
+- **スタッフパネルの開き方（Y＋B 2 秒）は来場者向け案内の 3 行目に出す**（スタッフが要る場面だけ。§10.4）。押している間は残り秒数を出す。
 - 押しても受け付けない操作には、長めの振動を返す（押して無反応にしない。§9.5-7）。
+
+### 14.5b 自動フェード（`Demo/AutoFadeCycle`）
+
+表示中（`Showing`）に、3DGS を「出す（`autoFadeShownS`）→ フェードアウト → 消す（`autoFadeHiddenS`）→ フェードイン → …」と繰り返す。重ねる前と後の見比べを、X を知らない来場者にも見せるため（`Specification.md` §15.4-2）。スタッフがパネルの右トリガー（HUD の `Auto fade`）で ON にする。ON/OFF は起動中だけ覚える（既定は `autoFadeOnStart`）。
+
+- **回すのは `Showing` で、確かめ直しの途中でないときだけ。** それ以外の局面に入ったら止まり、表示は `DemoController.Enter` が決める（非表示は即時）。確信の無い姿勢を見せない原則（§14.2）は変わらない。
+- **消すのはフェードアウトの途中でも即時**（`AlignmentManager.SetSplatVisible(false)`）。フェードで消すのは自動フェードの消す段だけ（`FadeOutSplats`）。フェードは今の不透明度から始めるので、途中で向きを変えても跳ねない。
+- **来場者が X（または HUD の表示ボタン）を押したら、その人の間は止める**（`AlignmentManager.OnUserToggledSplats`）。押した結果（出す／消す）をそのまま残す。回し続けると数秒で上書きされ、X が壊れたように見えるため。**次にかぶった人（`HMDMounted`）から再開する。** 回っていない局面（再位置合わせ中に X で覗く など）の X では止めない。止めている間、パネルのボタンは `Resume auto fade (paused by X)` になり、右トリガーで OFF にせず再開する。
+- スタッフが OFF にしたとき消している段だったら、フェードインして出した状態に戻す。
+- 判定（いつ出す・消すか）は純粋クラスの `AutoFadeCycle` にあり、`DemoController` は結果を `AlignmentManager.FadeInSplats` / `FadeOutSplats` に渡すだけ（`RealignMonitor` と同じ分け方）。
 
 ### 14.6 実機で確かめること（未了）
 

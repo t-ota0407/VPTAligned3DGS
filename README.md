@@ -119,7 +119,7 @@ If the access point blocks broadcast traffic, set the PC's IP in `UDPManager.man
 
 `start_*.bat` launches `run.py` (receive, reply, GUI; one `session_<timestamp>/` per launch), which in turn starts the CV worker in WSL2 and stops it when the window is closed. Arguments are passed through, e.g. `start_demo.bat --scene scene_data/<name>` when there are several scenes.
 
-Then launch the app on the Quest and **walk around the room** while sending keyframes with the left grip. Once independently solved Sim(3) estimates agree consecutively, the alignment locks. In the demo mode (hold both thumbsticks for 3 s on the first screen) the alignment is also saved to spatial anchors and restored after a restart.
+Then launch the app on the Quest and **walk around the room** while sending keyframes with the left grip. Once independently solved Sim(3) estimates agree consecutively, the alignment locks. In the demo mode (hold both thumbsticks for 2 s on the first screen) the alignment is also saved to spatial anchors and restored after a restart.
 
 ---
 

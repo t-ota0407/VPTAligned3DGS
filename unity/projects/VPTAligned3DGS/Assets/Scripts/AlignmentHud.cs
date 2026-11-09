@@ -37,7 +37,8 @@ using UnityEngine.UI;
 /// **デモ展示モード**（[[DemoController]] があるシーン）では 2 枚に分かれる（→ ImplementationSpec.md §14）:
 ///   - 来場者向けの案内（小さな 1 枚。`Look around the room` など）。頭に緩く付いてくる。
 ///     スタッフが要る場面では 3 行目にスタッフパネルの開き方（Y＋B 長押し）を出す。
-///   - スタッフパネル（この主パネル）。Y＋B 長押しで開閉し、右グリップのトグルは使わない
+///   - スタッフパネル（この主パネル）。Y＋B 長押しで開閉する。開いている間は右グリップでパネルだけ隠せる
+///     （スタッフモードのまま。来場者の間の右グリップは何もしない）
 ///     （来場者はグリップを握ったまま操作するので、偶然開いてしまう）。
 ///
 /// **ファイル構成（partial クラス）**: このファイル = 共通（表示・追従・各欄への流し込み・Poke）/
@@ -173,9 +174,11 @@ public partial class AlignmentHud : MonoBehaviour
 
         if (demo != null)
         {
-            // デモ: 主パネル（スタッフ用）はスタッフパネルを開いている間だけ出す。
-            // 右グリップのトグルは使わない（来場者は握ったまま操作するので、偶然開いてしまう）。
-            if (_visible != demo.StaffMode) { SetVisible(demo.StaffMode); if (_visible) PlaceInFront(); }
+            // デモ: 主パネル（スタッフ用）はスタッフパネルを開いている間だけ出す。スタッフは右グリップで
+            // パネルだけ隠せる（DemoController.StaffPanelHidden。スタッフモードのまま）。来場者の間は
+            // 右グリップに何もさせない（来場者は握ったまま操作するので、偶然開いてしまう）。
+            bool want = demo.StaffMode && !demo.StaffPanelHidden;
+            if (_visible != want) { SetVisible(want); if (_visible) PlaceInFront(); }
             UpdateVisitorHint();
         }
         else

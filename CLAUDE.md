@@ -22,7 +22,7 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 
 位置合わせは、パススルーカメラ画像を **3DGS の元になった COLMAP 再構成に再ローカライズ**し、複数キーフレームのカメラ中心から **Umeyama で Sim(3)** を解いて splatRoot に適用する。**自動位置合わせまで実機で動作確認済み。**
 
-1 つのアプリに 2 つのモード: **評価実験**（`GSTestScene`・起動時）と、位置合わせを空間アンカーで永続化して電源断を跨いで再利用する**デモ展示**（`DemoScene`。最初の画面で両スティック 3 秒押込で切替。`Specification.md` §15。**実機確認は未了**）。
+1 つのアプリに 2 つのモード: **評価実験**（`GSTestScene`・起動時）と、位置合わせを空間アンカーで永続化して電源断を跨いで再利用する**デモ展示**（`DemoScene`。最初の画面で両スティック 2 秒押込で切替。`Specification.md` §15。**実機確認は未了**）。
 
 ---
 
@@ -104,7 +104,7 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 | **`HasTarget` を疎通判定に使わない**（`ServerAlive` を使う） | `ImplementationSpec.md` §3.3 |
 | **`.ply` を実行時に直接読まない**（必ず Editor でアセット変換を経る） | §7 |
 | **OpenXR パススルー層からカメラ画像は取れない**（PCA を使う） | `Specification.md` §4.1 |
-| **デモと実験は同じ APK の別シーン。保存ファイルを分ける**（デモは `vptalign_demo_*`。同名だと実験の試行開始の `ClearSaved` がデモの保存を消す）。**実験側の永続化 OFF は `ExperimentController.Awake` で行う**（`Start` だと復元と順序が不定）。切替（両スティック 3 秒）は作業の途中・測った記録が PC 未送達のときは受け付けない。**送信待ちがあるだけでは止めない**（起動時の行が常に残っており、PC 無しでデモに入れなくなる） | `Specification.md` §15.1 / `ImplementationSpec.md` §7.1・§14.1 |
+| **デモと実験は同じ APK の別シーン。保存ファイルを分ける**（デモは `vptalign_demo_*`。同名だと実験の試行開始の `ClearSaved` がデモの保存を消す）。**実験側の永続化 OFF は `ExperimentController.Awake` で行う**（`Start` だと復元と順序が不定）。切替（両スティック 2 秒）は作業の途中・測った記録が PC 未送達のときは受け付けない。**送信待ちがあるだけでは止めない**（起動時の行が常に残っており、PC 無しでデモに入れなくなる） | `Specification.md` §15.1 / `ImplementationSpec.md` §7.1・§14.1 |
 | **位置合わせはワールド座標で保存しない**（原点は起動・電源断で変わる）。**アンカーから見た相対姿勢**で保存し、復元は複数アンカーの多数決で行う | `Specification.md` §15.2・§15.5 / `ImplementationSpec.md` §7 |
 | **アンカー追従は `AlignmentManager.IsAnchored` の間だけ**姿勢を書き換える。姿勢を変える経路を足したら `_anchored=false` に落とす（落とさないと古いアンカーが新しい姿勢を上書きする） | `ImplementationSpec.md` §6.1・§7.3 |
 | **デモでは合っている確信の無い姿勢を来場者に見せない**（多数決が揃うまで非表示）。来場者に残す入力は X だけ | `Specification.md` §15.4 / `ImplementationSpec.md` §14 |
@@ -139,7 +139,7 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 ## 9. ビルド & 動作確認
 
 - Build Profiles で Android に切替（早めにやる）。ARM64 / IL2CPP / Vulkan。
-- Scene List は `GSTestScene`（先頭＝起動時）と `DemoScene` の 2 つ。APK は 1 つで、起動後に両スティック 3 秒でデモへ切り替える（`OperationGuide.md` §10）。
+- Scene List は `GSTestScene`（先頭＝起動時）と `DemoScene` の 2 つ。APK は 1 つで、起動後に両スティック 2 秒でデモへ切り替える（`OperationGuide.md` §10）。
 - 実機で確認すべき最低ライン: 両目で 3DGS が正しく描画される / パススルーが表示される / 想定フレームレートが出る / 必要権限のダイアログが出る。
 - パフォーマンス低下時はスプラット数・品質レベル・Render Mode・ソート設定を順に見直す。
 - ログは MCP 経由（Editor）と実機（`adb logcat`）の両面で確認する。
