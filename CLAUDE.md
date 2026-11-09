@@ -34,7 +34,7 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 | レンダーパイプライン | **URP**（Render Graph Compatibility Mode Off） | BiRP は VR で行列周りの不具合報告あり |
 | Render Mode | **OpenXR Multi-Pass** | aras-p v1.1.1 は Single Pass Instanced 非対応。`GaussianSplatURPFeature` は **PC・Mobile 両 Renderer** に付与 |
 | Graphics API | **Vulkan** | aras-p は D3D12/Metal/Vulkan のみ。OpenGL ES では描画できない |
-| 3DGS | `org.nesnausk.gaussian-splatting`（aras-p）**v1.1.1・素（未改変）** | `unity/package/` に同梱（MIT）。採用シーンは約 15 万スプラット |
+| 3DGS | `org.nesnausk.gaussian-splatting`（aras-p）**v1.1.1＋改変（6 ファイル）** | `unity/package/` に同梱（MIT）。改変の一覧は `THIRD-PARTY-NOTICES.md`。採用シーンは約 15 万スプラット |
 | XR / パススルー | Unity OpenXR + Meta OpenXR feature ＋ **Meta XR Core SDK / MRUK** | |
 | カメラ映像 | **`PassthroughCameraAccess`**（MRUK v81+） | 旧 `WebCamTextureManager`/`PassthroughCameraUtils` は非推奨。権限は `HEADSET_CAMERA` のみ |
 | ビルド | Android / ARM64 / IL2CPP | |
@@ -121,7 +121,7 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 - `.ply` は Editor の **`Tools > Gaussian Splats > Create GaussianSplatAsset`** で GaussianSplatAsset ＋ データファイルに変換してから `GaussianSplatRenderer` に割り当てる。**実行時に `.ply` を直接読まない。**
 - 品質レベルでサイズと描画負荷が変わる。Quest 向けは **Medium 以下**を起点に検証する。
 - 位置合わせの結果は `GaussianSplatRenderer` ルート Transform の SRT で表す。**スプラットデータ自体は書き換えない。**
-- `unity/package/` は**素（未改変）で同梱**している。改変した場合は MIT に従い「改変した旨・改変者」を `THIRD-PARTY-NOTICES.md` に明記すること。
+- `unity/package/` は **v1.1.1 に改変を加えたもの**を同梱している（基盤の `scalabroom` から引き継いだ 6 ファイル。合成の全体不透明度・深度の扱い・y 反転など）。一覧は `THIRD-PARTY-NOTICES.md`。**この改変を戻さない**（実機で確認した構成に含まれる）。さらに改変した場合は MIT に従い「改変した旨・改変者」を同ファイルに明記すること。
 
 ---
 
@@ -144,7 +144,7 @@ Claude Code がこのリポジトリで作業する際の**規約**。**毎回�
 - パフォーマンス低下時はスプラット数・品質レベル・Render Mode・ソート設定を順に見直す。
 - ログは MCP 経由（Editor）と実機（`adb logcat`）の両面で確認する。
 
-> **レンダラ実機検証ゲート（クリア済み・2026-06）**: aras-p レンダラの Quest 3 スタンドアロン動作には既知のリスクがあった（GitHub Issues #26/#112/#151/#205: OpenGL ES 非対応・Android でソート不動・**ヘッドポーズに合わせて貼り付かずズレる**・黒画面）。ゼロ構築では 3DGS 表示とパススルー両立が難航し #151 のズレも再現したため、**両立して動作する既存アプリ（`scalabroom`）をコピーして基盤に採用**した。§2 の構成で両眼描画・貼り付き・ソート安定・72fps 圏内を実機で確認済み。**この構成（Multi-Pass / Vulkan / 素の v1.1.1）を崩さないこと。**
+> **レンダラ実機検証ゲート（クリア済み・2026-06）**: aras-p レンダラの Quest 3 スタンドアロン動作には既知のリスクがあった（GitHub Issues #26/#112/#151/#205: OpenGL ES 非対応・Android でソート不動・**ヘッドポーズに合わせて貼り付かずズレる**・黒画面）。ゼロ構築では 3DGS 表示とパススルー両立が難航し #151 のズレも再現したため、**両立して動作する既存アプリ（`scalabroom`）をコピーして基盤に採用**した。§2 の構成で両眼描画・貼り付き・ソート安定・72fps 圏内を実機で確認済み。**この構成（Multi-Pass / Vulkan / 同梱の v1.1.1＋改変）を崩さないこと。**
 
 ---
 

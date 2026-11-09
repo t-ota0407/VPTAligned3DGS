@@ -1050,5 +1050,5 @@ nvidia-smi                                                     # GPU が見え�
 ## 11. ライセンス / クレジット
 
 - **本プロジェクト自作部分**（`Assets/Scripts/`, `server/`, 設計文書）は **MIT License**（プロジェクト直下 [`LICENSE`](../LICENSE)）。
-- **3DGS 表示**: [aras-p / UnityGaussianSplatting](https://github.com/aras-p/UnityGaussianSplatting)（`unity/package`、**MIT**, © 2023 Aras Pranckevičius）を**素で同梱**。ライセンス本文 `unity/package/LICENSE.md` および `unity/LICENSE.md` は MIT 遵守のため**保持**（削除しない）。
+- **3DGS 表示**: [aras-p / UnityGaussianSplatting](https://github.com/aras-p/UnityGaussianSplatting)（`unity/package`、**MIT**, © 2023 Aras Pranckevičius）を**改変して同梱**（v1.1.1 に 6 ファイルの改変。一覧は [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md)）。ライセンス本文 `unity/package/LICENSE.md` および `unity/LICENSE.md` は MIT 遵守のため**保持**（削除しない）。
 - CV / XR の第三者依存（hloc, LightGlue, COLMAP/pycolmap, Meta XR SDK, Unity 等）と、**⚠ 非商用/研究用途限定の学習済みモデル（SuperPoint / NetVLAD）** の一覧・注意はプロジェクト直下 [`THIRD-PARTY-NOTICES.md`](../THIRD-PARTY-NOTICES.md) を参照。

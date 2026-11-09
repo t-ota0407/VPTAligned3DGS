@@ -33,9 +33,30 @@ WSL2 に各配布元から取得する（hloc・LightGlue は GitHub、重みは
 
 - ソースをリポジトリに**同梱（再配布）**している（選択肢B）。MIT の要求どおり、著作権表示とライセンス本文を
   `unity/package/LICENSE.md`（および `unity/LICENSE.md`）として保持している。**これらは削除しないこと。**
-- 本プロジェクトでは v1.1.1 を**素（未改変）**で使用（`CLAUDE.md` §2）。もし `unity/package/` 配下を改変した
-  場合は、MIT に従い「改変した旨・改変者」を該当ファイルまたは本 NOTICE に明記すること。
 - 上流: https://github.com/aras-p/UnityGaussianSplatting
+- 改変後も MIT のまま配布する（上流の著作権表示とライセンス本文はそのまま保持）。
+
+### 同梱版への改変
+
+同梱しているのは **v1.1.1（上流タグ `v1.1.1`・コミット `9310dce`）に改変を加えたもの**で、素の v1.1.1 ではない。
+2026-11-09 に上流のタグと突き合わせた結果、改変は `unity/package/` の次の 6 ファイル（改行コードの違いは除く）。
+それ以外のファイル、および `unity/docs/`・`unity/LICENSE.md` は上流と同一。
+
+| ファイル | 改変の内容 |
+|---|---|
+| `Shaders/GaussianComposite.shader` | 合成の出力の α を全体の不透明度 `_GaussianSplatGlobalOpacity`（`GaussianSplatController` が `Shader.SetGlobalFloat` で設定。表示・非表示・フェードに使う）にする。色を α で割って戻し、α=0 の画素は捨てる。Editor（非 Android）では、シーンの深度テクスチャ `_GS_DepthTex` を見て手前に物がある画素を捨てる（ソフトウェア深度テスト）。`#pragma use_dxc` を外す |
+| `Shaders/RenderGaussianSplats.shader` | `ZTest Always`（シーンの深度バッファに対して深度テストしない）。`#pragma use_dxc` を外す（Vulkan のため） |
+| `Shaders/SplatUtilities.compute` | スプラット中心のクリップ座標の y を反転する（`centerClipPos.y *= -1`）。先頭に UTF-8 BOM |
+| `Runtime/GaussianSplatURPFeature.cs` | 描画先（GaussianSplatRT）に深度バッファを結び付けない。`_CameraTargetTexture` に GaussianSplatRT を渡し、投影の上下反転（FlipProjectionIfBackbuffer）を抑える。Editor では深度テクスチャを合成シェーダに渡す。パスの順序を Android 実機は `BeforeRenderingOpaques`、Editor は `BeforeRenderingTransparents` にする |
+| `Runtime/GaussianSplatRenderer.cs` | ソータが使えないとき（wave ops 非対応）に `Dispatch` を呼ばないガード。先頭に UTF-8 BOM |
+| `Editor/GaussianSplatAssetCreator.cs` | コメントの綴りの修正のみ（unformly → uniformly） |
+
+- **由来**: 本リポジトリの初回コミット（`2b00acb`）から含まれており、それ以後は変えていない。基盤に採用した既存アプリ
+  `scalabroom`（`CLAUDE.md` §9）から引き継いだもの。
+- **改変者**: Takashi Ota（`scalabroom` で改変。本リポジトリに入れてからの改変は無い）。
+- **戻さないこと。** Quest 3 で両眼描画・貼り付き・ソートを実機で確認した構成（`CLAUDE.md` §9）は、この改変を含む。
+  個々の改変がそれぞれ必須かどうかは検証していない。
+- `unity/package/` をさらに改変したら、この表に足す（改変した旨・改変者・内容）。
 
 ## 位置合わせ CV パイプライン（PC / WSL2 側）
 
